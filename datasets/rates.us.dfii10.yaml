@@ -1,0 +1,29 @@
+# 10-year TIPS constant-maturity real yield (FRED series DFII10), one observation per US
+# business day. The strongest documented slow driver of gold; see the design spec, class B.
+#
+# The observation date is the PERIOD a value describes, never its availability: FRED publishes
+# a daily yield the next business morning. Live collection stamps `known_at` from the ingest
+# clock as `observed`. A backfill from the CSV archive can only estimate availability, so it is
+# stamped `derived` with a declared lag (next business day, 13:00 UTC -- the conservative
+# release window the engine's macro path already assumes), and a strict consumer may refuse it.
+dataset: rates.us.dfii10
+version: 1
+title: 10y TIPS real yield (DFII10)
+scope_kind: currency
+key: [period_start, scope]
+collector:
+  kind: http_csv
+  url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10
+  cadence: 6h
+  record_path: "$[*]"
+  scope: { const: USD }
+  effective_at: { from: observation_date, parse: date_in_zone, zone: America/New_York, hour: 16 }
+  period_start: { from: observation_date, parse: date_in_zone, zone: UTC, hour: 0 }
+  known_at: ingest_time
+  fields:
+    value: { from: DFII10, parse: percent_or_number, null_if: [".", ""] }
+fields:
+  value: { type: number, unit: pct, null_policy: allow }
+  change_1d: { type: number, unit: pct, derived: "diff(value, 1)", null_policy: allow }
+quality:
+  range: { value: [-10, 20] }

@@ -38,7 +38,10 @@ FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 DOMAINS = frozenset({"macro", "cal", "rates", "cb", "pos", "inv", "corp", "venue", "mkt", "text", "hub"})
 
-RESERVED_FIELD_NAMES = frozenset({"known_at", "effective_at", "revision", "value"})
+# `value` is deliberately NOT reserved: a single-field dataset names its one field `value` so a
+# consumer can read `alias.value` without any schema lookup at compile time. That is simpler and
+# more honest than an alias table the reader would have to consult before it could name a field.
+RESERVED_FIELD_NAMES = frozenset({"known_at", "effective_at", "revision"})
 
 
 class Availability(StrEnum):
