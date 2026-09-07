@@ -7,7 +7,16 @@ artifact it ran against. This module owns decoding because the format's contract
 `NULL_SENTINEL`, the scale-8 fixed-point encoding of numbers -- must be readable by a bare
 consumer with no access to `hub`, the same way `hubread.record` owns the journal's record shape.
 
-Encoding lives in `hub.snapshot` (the compiler is a writer); this module only ever reads.
+The body is genuinely columnar: one contiguous block per column holding every record's value for
+that column, in sorted record order -- not one record's worth of columns at a time. That is what
+lets a range scan over a single column (say, `known_at`, to binary-search a window) be one
+contiguous read, and what lets a future non-Python reader memory-map one column without touching
+the rest.
+
+`source`, `source_version`, `parser` and `raw_ref` are dictionary-encoded exactly like `scope`
+and `key`, so a record decoded from a snapshot carries the same provenance as the record that was
+journaled and compares equal to it -- the replay-equivalence property the rest of the product
+depends on. Encoding lives in `hub.snapshot` (the compiler is a writer); this module only reads.
 """
 from __future__ import annotations
 
@@ -29,16 +38,24 @@ SCALE = 8
 #: confused with real data.
 NULL_SENTINEL = -(2**63)
 
+#: A null `raw_ref` has no entry in the raw_ref dictionary at all, so it is encoded as this index
+#: rather than pointing at a dictionary slot -- there is no string to point at.
+NULL_DICT_INDEX = -1
+
 #: The closed set of payload kinds a snapshot stores as an i64 column. `string` fields are
 #: deliberately absent: they live in the journal only, so a snapshot never has to size a column
 #: for unbounded text.
 _TYPE_CODE_BY_NAME = {"number": 0, "bool": 1, "timestamp": 2, "enum": 3}
 _TYPE_NAME_BY_CODE = {code: name for name, code in _TYPE_CODE_BY_NAME.items()}
 
-#: Fixed per-record body columns before the per-field columns start: known_at, effective_at,
+#: The six dictionaries, in the exact header order the format spec fixes.
+DICTIONARY_NAMES = ("scope", "key", "source", "source_version", "parser", "raw_ref")
+
+#: Fixed per-record columns before the per-field columns start: known_at, effective_at,
 #: period_start, period_end (8 bytes each), scope_idx, key_idx, revision (4 bytes each),
-#: availability (1 byte), seq (8 bytes).
-_FIXED_ROW_BYTES = 8 * 4 + 4 * 3 + 1 + 8
+#: availability (1 byte), seq (8 bytes), then source_idx, source_version_idx, parser_idx,
+#: raw_ref_idx (4 bytes each).
+_FIXED_ROW_BYTES = 8 * 4 + 4 * 3 + 1 + 8 + 4 * 4
 
 
 def sha256_of(data: bytes) -> str:
@@ -80,6 +97,10 @@ class SnapshotHeader:
     fields: tuple[SnapshotField, ...]
     scopes: tuple[str, ...]
     keys: tuple[str, ...]
+    sources: tuple[str, ...]
+    source_versions: tuple[str, ...]
+    parsers: tuple[str, ...]
+    raw_refs: tuple[str, ...]
 
 
 class _Cursor:
@@ -105,9 +126,6 @@ class _Cursor:
     def i32(self) -> int:
         return int(struct.unpack("<i", self.take(4))[0])
 
-    def i64(self) -> int:
-        return int(struct.unpack("<q", self.take(8))[0])
-
     def u8(self) -> int:
         return self.take(1)[0]
 
@@ -119,6 +137,14 @@ class _Cursor:
             return self.take(length).decode("utf-8")
         except UnicodeDecodeError as e:
             raise StoreError(f"truncated snapshot: invalid utf-8: {e}") from e
+
+    def column(self, fmt: str, count: int) -> tuple[int, ...]:
+        """Read `count` contiguous little-endian `fmt` values as one column."""
+        if count == 0:
+            return ()
+        size = struct.calcsize(fmt) * count
+        result: tuple[int, ...] = struct.unpack(f"<{count}{fmt}", self.take(size))
+        return result
 
 
 def _decode_field_value(field: SnapshotField, raw: int, scale: int) -> object:
@@ -163,8 +189,13 @@ def decode(data: bytes) -> tuple[SnapshotHeader, list[Record]]:
         unit = cursor.string()
         fields.append(SnapshotField(name=name, type=_TYPE_NAME_BY_CODE[code], unit=unit))
 
-    scopes = [cursor.string() for _ in range(cursor.i32())]
-    keys = [cursor.string() for _ in range(cursor.i32())]
+    dictionaries: dict[str, list[str]] = {}
+    for dict_name in DICTIONARY_NAMES:
+        count = cursor.i32()
+        dictionaries[dict_name] = [cursor.string() for _ in range(count)]
+    scopes, keys = dictionaries["scope"], dictionaries["key"]
+    sources, source_versions = dictionaries["source"], dictionaries["source_version"]
+    parsers, raw_refs = dictionaries["parser"], dictionaries["raw_ref"]
 
     header_len = cursor.offset
     row_bytes = _FIXED_ROW_BYTES + field_count * 8
@@ -176,40 +207,54 @@ def decode(data: bytes) -> tuple[SnapshotHeader, list[Record]]:
     if hashlib.sha256(data[:-32]).digest() != trailer:
         raise StoreError("corrupt snapshot: trailer checksum does not match")
 
+    n = record_count
+    known_ats = cursor.column("q", n)
+    effective_ats = cursor.column("q", n)
+    period_starts = cursor.column("q", n)
+    period_ends = cursor.column("q", n)
+    scope_idxs = cursor.column("i", n)
+    key_idxs = cursor.column("i", n)
+    revisions = cursor.column("i", n)
+    availabilities = cursor.column("B", n)
+    seqs = cursor.column("q", n)
+    source_idxs = cursor.column("i", n)
+    source_version_idxs = cursor.column("i", n)
+    parser_idxs = cursor.column("i", n)
+    raw_ref_idxs = cursor.column("i", n)
+    field_columns = [cursor.column("q", n) for _ in fields]
+
     availability_by_ordinal = list(Availability)
+
+    def _lookup(dictionary: list[str], idx: int, what: str) -> str:
+        if not (0 <= idx < len(dictionary)):
+            raise StoreError(f"corrupt snapshot: {what} index {idx} out of range")
+        return dictionary[idx]
+
     records = []
-    for _ in range(record_count):
-        known_at = cursor.i64()
-        effective_at = cursor.i64()
-        period_start = cursor.i64()
-        period_end = cursor.i64()
-        scope_idx = cursor.i32()
-        key_idx = cursor.i32()
-        revision = cursor.i32()
-        availability_ord = cursor.u8()
-        seq = cursor.i64()
-        if not (0 <= scope_idx < len(scopes)) or not (0 <= key_idx < len(keys)):
-            raise StoreError("corrupt snapshot: scope or key index out of range")
-        if not (0 <= availability_ord < len(availability_by_ordinal)):
-            raise StoreError(f"corrupt snapshot: unknown availability ordinal {availability_ord}")
-        payload = {}
-        for field in fields:
-            raw = cursor.i64()
-            payload[field.name] = _decode_field_value(field, raw, scale)
+    for i in range(n):
+        avail_ord = availabilities[i]
+        if not (0 <= avail_ord < len(availability_by_ordinal)):
+            raise StoreError(f"corrupt snapshot: unknown availability ordinal {avail_ord}")
+        raw_ref_idx = raw_ref_idxs[i]
+        raw_ref = None if raw_ref_idx == NULL_DICT_INDEX else _lookup(raw_refs, raw_ref_idx, "raw_ref")
+        payload = {field.name: _decode_field_value(field, field_columns[j][i], scale) for j, field in enumerate(fields)}
         records.append(
             Record.create(
                 dataset=dataset,
-                scope=scopes[scope_idx],
-                key=keys[key_idx],
-                revision=revision,
-                known_at=known_at,
-                effective_at=effective_at,
-                availability=availability_by_ordinal[availability_ord],
-                source="snapshot",
+                scope=_lookup(scopes, scope_idxs[i], "scope"),
+                key=_lookup(keys, key_idxs[i], "key"),
+                revision=revisions[i],
+                known_at=known_ats[i],
+                effective_at=effective_ats[i],
+                availability=availability_by_ordinal[avail_ord],
+                source=_lookup(sources, source_idxs[i], "source"),
+                source_version=_lookup(source_versions, source_version_idxs[i], "source_version"),
+                parser=_lookup(parsers, parser_idxs[i], "parser"),
+                raw_ref=raw_ref,
                 fields=payload,
-                period_start=None if period_start == NULL_SENTINEL else period_start,
-                period_end=None if period_end == NULL_SENTINEL else period_end,
-                seq=seq,
+                period_start=None if period_starts[i] == NULL_SENTINEL else period_starts[i],
+                period_end=None if period_ends[i] == NULL_SENTINEL else period_ends[i],
+                seq=seqs[i],
             )
         )
 
@@ -223,5 +268,9 @@ def decode(data: bytes) -> tuple[SnapshotHeader, list[Record]]:
         fields=tuple(fields),
         scopes=tuple(scopes),
         keys=tuple(keys),
+        sources=tuple(sources),
+        source_versions=tuple(source_versions),
+        parsers=tuple(parsers),
+        raw_refs=tuple(raw_refs),
     )
     return header, records

@@ -10,6 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from hub.errors import StoreError
+from hub.journal import JournalWriter
 from hub.record import Availability, Record
 from hub.schema import load_schema
 from hub.snapshot import encode
@@ -129,6 +130,39 @@ class SnapshotRoundTripTest(unittest.TestCase):
         data[-33] ^= 0xFF
         with self.assertRaises(StoreError):
             decode(bytes(data))
+
+    def test_encode_empty_record_list(self):
+        header, records = decode(encode(self.schema, []))
+        self.assertEqual(header.record_count, 0)
+        self.assertEqual(records, [])
+
+    def test_absent_field_and_explicit_none_both_decode_to_none(self):
+        absent = make(price="1")
+        explicit_none = make(price="1", active=None, asof=None, impact=None)
+        _, from_absent = decode(encode(self.schema, [absent]))
+        _, from_none = decode(encode(self.schema, [explicit_none]))
+        expected = {"price": "1", "active": None, "asof": None, "impact": None}
+        self.assertEqual(from_absent[0].fields, expected)
+        self.assertEqual(from_none[0].fields, expected)
+
+    def test_record_round_trips_through_journal_and_snapshot_with_full_equality(self):
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            original = make(scope="EURUSD", price="1.5", active=True, asof=1_757_000_000_000, impact=1)
+            original = original.replace(source_version="v2", parser="fx-parser", raw_ref="sha256:abc123").with_id()
+            with JournalWriter(root) as w:
+                stamped = w.append(original)
+            header, records = decode(encode(self.schema, [stamped]))
+            self.assertEqual(records[0], stamped)
+            self.assertIn("v2", header.source_versions)
+            self.assertIn("fx-parser", header.parsers)
+            self.assertIn("sha256:abc123", header.raw_refs)
+
+    def test_null_raw_ref_round_trips_to_none(self):
+        record = make(price="1")
+        self.assertIsNone(record.raw_ref)
+        _, records = decode(encode(self.schema, [record]))
+        self.assertIsNone(records[0].raw_ref)
 
 
 if __name__ == "__main__":

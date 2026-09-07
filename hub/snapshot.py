@@ -3,8 +3,14 @@
 The compiler is a writer on top of a format `hubread.snapshot` owns: this module turns a
 schema and a batch of records into the exact bytes a bare consumer can decode. It sorts before
 encoding so the compiler's determinism test is not at the mercy of the caller's iteration order,
-and it refuses -- rather than rounds -- a number that would lose precision at scale 8, because a
-silently rounded number is a fact that has quietly changed.
+it writes the body as one contiguous block per column (not one record's columns at a time) to
+match the format's genuinely-columnar contract, and it refuses -- rather than rounds -- a number
+that would lose precision at scale 8, because a silently rounded number is a fact that has
+quietly changed.
+
+`source`, `source_version`, `parser` and `raw_ref` are dictionary-encoded alongside `scope` and
+`key`, so a record decoded from the snapshot this produces carries the same provenance as the
+record that was journaled, and compares equal to it.
 """
 from __future__ import annotations
 
@@ -15,7 +21,7 @@ from typing import Any
 from hub.errors import RecordError, StoreError
 from hub.record import Availability, Record, sort_key
 from hub.schema import DatasetSchema, FieldSpec, FieldType
-from hubread.snapshot import MAGIC, NULL_SENTINEL, SCALE, VERSION, field_type_code, sha256_of
+from hubread.snapshot import MAGIC, NULL_DICT_INDEX, NULL_SENTINEL, SCALE, VERSION, field_type_code, sha256_of
 
 
 def _encode_field_value(spec: FieldSpec, value: Any) -> int:
@@ -51,6 +57,15 @@ def _pack_str(text: str) -> bytes:
     return struct.pack("<i", len(body)) + body
 
 
+def _pack_column(fmt: str, values: list[int]) -> bytes:
+    """Pack `values` as one contiguous little-endian block -- a genuine column, not per-record
+    interleaving. Empty is handled explicitly because `struct.pack("<0q")` with no arguments is
+    well-defined but reads oddly next to the non-empty case."""
+    if not values:
+        return b""
+    return struct.pack(f"<{len(values)}{fmt}", *values)
+
+
 def encode(schema: DatasetSchema, records: list[Record]) -> bytes:
     """Encode `records` under `schema` as a `QKH1` buffer.
 
@@ -65,12 +80,20 @@ def encode(schema: DatasetSchema, records: list[Record]) -> bytes:
 
     scopes = sorted({r.scope for r in ordered})
     keys = sorted({r.key for r in ordered})
-    scope_index = {scope: i for i, scope in enumerate(scopes)}
-    key_index = {key: i for i, key in enumerate(keys)}
-    storable_fields = [f for f in schema.fields.values() if f.type != FieldType.STRING]
+    sources = sorted({r.source for r in ordered})
+    source_versions = sorted({r.source_version for r in ordered})
+    parsers = sorted({r.parser for r in ordered})
+    raw_refs = sorted({r.raw_ref for r in ordered if r.raw_ref is not None})
 
-    schema_hash_hex = schema.hash().removeprefix("sha256:")
-    schema_hash = bytes.fromhex(schema_hash_hex)
+    scope_index = {v: i for i, v in enumerate(scopes)}
+    key_index = {v: i for i, v in enumerate(keys)}
+    source_index = {v: i for i, v in enumerate(sources)}
+    source_version_index = {v: i for i, v in enumerate(source_versions)}
+    parser_index = {v: i for i, v in enumerate(parsers)}
+    raw_ref_index = {v: i for i, v in enumerate(raw_refs)}
+
+    storable_fields = [f for f in schema.fields.values() if f.type != FieldType.STRING]
+    schema_hash = bytes.fromhex(schema.hash().removeprefix("sha256:"))
 
     out = bytearray()
     out += MAGIC
@@ -84,26 +107,28 @@ def encode(schema: DatasetSchema, records: list[Record]) -> bytes:
         out += _pack_str(f.name)
         out += struct.pack("<B", field_type_code(f.type.value))
         out += _pack_str(f.unit)
-    out += struct.pack("<i", len(scopes))
-    for scope in scopes:
-        out += _pack_str(scope)
-    out += struct.pack("<i", len(keys))
-    for key in keys:
-        out += _pack_str(key)
+    for dictionary in (scopes, keys, sources, source_versions, parsers, raw_refs):
+        out += struct.pack("<i", len(dictionary))
+        for value in dictionary:
+            out += _pack_str(value)
 
     availability_ordinal = {a: i for i, a in enumerate(Availability)}
-    for record in ordered:
-        out += struct.pack("<q", record.known_at)
-        out += struct.pack("<q", record.effective_at)
-        out += struct.pack("<q", record.period_start if record.period_start is not None else NULL_SENTINEL)
-        out += struct.pack("<q", record.period_end if record.period_end is not None else NULL_SENTINEL)
-        out += struct.pack("<i", scope_index[record.scope])
-        out += struct.pack("<i", key_index[record.key])
-        out += struct.pack("<i", record.revision)
-        out += struct.pack("<B", availability_ordinal[record.availability])
-        out += struct.pack("<q", record.seq)
-        for f in storable_fields:
-            out += struct.pack("<q", _encode_field_value(f, record.fields.get(f.name)))
+
+    out += _pack_column("q", [r.known_at for r in ordered])
+    out += _pack_column("q", [r.effective_at for r in ordered])
+    out += _pack_column("q", [r.period_start if r.period_start is not None else NULL_SENTINEL for r in ordered])
+    out += _pack_column("q", [r.period_end if r.period_end is not None else NULL_SENTINEL for r in ordered])
+    out += _pack_column("i", [scope_index[r.scope] for r in ordered])
+    out += _pack_column("i", [key_index[r.key] for r in ordered])
+    out += _pack_column("i", [r.revision for r in ordered])
+    out += _pack_column("B", [availability_ordinal[r.availability] for r in ordered])
+    out += _pack_column("q", [r.seq for r in ordered])
+    out += _pack_column("i", [source_index[r.source] for r in ordered])
+    out += _pack_column("i", [source_version_index[r.source_version] for r in ordered])
+    out += _pack_column("i", [parser_index[r.parser] for r in ordered])
+    out += _pack_column("i", [raw_ref_index[r.raw_ref] if r.raw_ref is not None else NULL_DICT_INDEX for r in ordered])
+    for f in storable_fields:
+        out += _pack_column("q", [_encode_field_value(f, r.fields.get(f.name)) for r in ordered])
 
     trailer = bytes.fromhex(sha256_of(bytes(out)))
     return bytes(out) + trailer
