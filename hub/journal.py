@@ -14,7 +14,7 @@ from pathlib import Path
 from types import TracebackType
 
 from hub.errors import RecordError, StoreError
-from hub.record import Record
+from hub.record import Record, canonical_json
 from hubread.journal import day_str, journal_path, list_day_files
 
 
@@ -23,15 +23,17 @@ class JournalWriter:
 
     Holds an exclusive, non-blocking `flock` on `<root>/.writer.lock` for its whole lifetime,
     so a second writer started against the same root fails fast at construction rather than
-    silently interleaving `seq` values with this one. Each dataset's file descriptor is opened
-    once, in append mode, and reused; every write is a single `os.write` of a complete line
-    followed by an `fsync`, so a reader can never observe a line that is neither fully absent
-    nor fully present.
+    silently interleaving `seq` values with this one. On open, before any append, it repairs
+    every dataset's journal files: a torn trailing line left by a process that died mid
+    `os.write` is truncated off and preserved in quarantine, so a restart never concatenates a
+    new record onto a dead fragment and produces one unparseable line forever. Each dataset's
+    file descriptor is then opened once, in append mode, and reused; every write is a single
+    `os.write` of a complete line followed by an `fsync`, so a reader can never observe a line
+    that is neither fully absent nor fully present.
     """
 
-    def __init__(self, root: Path, flush_every: int = 1) -> None:
+    def __init__(self, root: Path) -> None:
         self.root = Path(root)
-        self.flush_every = flush_every
         (self.root / "journal").mkdir(parents=True, exist_ok=True)
         self._lock_file = open(self.root / ".writer.lock", "a+")
         try:
@@ -41,8 +43,8 @@ class JournalWriter:
             raise StoreError(f"another writer already holds the journal at {self.root}") from e
         self._seq: dict[str, int] = {}
         self._fds: dict[Path, int] = {}
-        self._writes_since_flush: dict[Path, int] = {}
         self._closed = False
+        self._repair_torn_tails()
 
     def append(self, record: Record) -> Record:
         """Stamp `record` with the next `seq` for its dataset, append it, and return the stamp.
@@ -60,27 +62,20 @@ class JournalWriter:
         line = (stamped.to_json() + "\n").encode("utf-8")
         fd = self._fd_for(path)
         os.write(fd, line)
-        pending = self._writes_since_flush.get(path, 0) + 1
-        if pending >= self.flush_every:
-            os.fsync(fd)
-            pending = 0
-        self._writes_since_flush[path] = pending
+        os.fsync(fd)
         self._seq[record.dataset] = seq
         return stamped
 
     def close(self) -> None:
-        """Flush, close every open file descriptor and release the writer lock.
+        """Close every open file descriptor and release the writer lock.
 
         Safe to call more than once so a `with` block and an explicit `close()` never conflict.
         """
         if self._closed:
             return
-        for path, fd in self._fds.items():
-            if self._writes_since_flush.get(path):
-                os.fsync(fd)
+        for fd in self._fds.values():
             os.close(fd)
         self._fds.clear()
-        self._writes_since_flush.clear()
         fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
         self._lock_file.close()
         self._closed = True
@@ -112,10 +107,9 @@ class JournalWriter:
         """The last `seq` already on disk for `dataset`, so a restarted writer does not
         restart numbering at 1 and collide with what a reader has already seen.
 
-        Reads only the newest day file's lines, not the whole dataset history. A last line
-        with no trailing newline is a crash-truncated write in progress, not a fact yet, so it
-        is ignored in favour of the line before it; if that one is also unreadable the file is
-        genuinely corrupt and resuming would guess a `seq`, which is worse than refusing.
+        Reads only the newest day file's lines, not the whole dataset history. By the time
+        this runs, `_repair_torn_tails` has already truncated any unterminated trailing line,
+        so the newest file's last line is either absent or a complete, parseable record.
         """
         days = list_day_files(self.root, dataset)
         if not days:
@@ -126,10 +120,60 @@ class JournalWriter:
             return 0
         try:
             return Record.from_json(lines[-1]).seq
-        except RecordError:
-            if len(lines) == 1:
-                return 0
-            try:
-                return Record.from_json(lines[-2]).seq
-            except RecordError as e:
-                raise StoreError(f"{newest}: cannot resume seq, malformed tail") from e
+        except RecordError as e:
+            raise StoreError(f"{newest}: cannot resume seq, malformed tail") from e
+
+    def _repair_torn_tails(self) -> None:
+        """Truncate every dataset's journal files back to their last complete line.
+
+        A journal line is only ever written as one atomic `os.write` of `line + "\\n"`. If a
+        process dies mid-write, the bytes already on disk are a fragment of a record that was
+        never actually committed -- the write that would have completed it never finished.
+        Discarding that fragment is repair, not rewriting history: it removes something that
+        was never a fact in the first place. The discarded bytes are not simply dropped; they
+        are recorded in quarantine so nothing vanishes without a trace, in an append-only store
+        whose whole value is auditability.
+
+        Runs once, while this writer alone holds the root's lock, before any dataset's file
+        descriptor is opened for append -- so a fresh `O_APPEND` write can never land on top of
+        a torn fragment and turn two good records into one permanently unparseable line.
+        """
+        journal_root = self.root / "journal"
+        if not journal_root.is_dir():
+            return
+        for dataset_dir in sorted(journal_root.iterdir()):
+            if not dataset_dir.is_dir():
+                continue
+            dataset = dataset_dir.name
+            for path in sorted(dataset_dir.glob("*.ndjson")):
+                self._repair_tail(dataset, path)
+
+    def _repair_tail(self, dataset: str, path: Path) -> None:
+        data = path.read_bytes()
+        if not data or data.endswith(b"\n"):
+            return
+        good_end = data.rfind(b"\n") + 1  # 0 if the file has no complete line at all
+        discarded = data[good_end:]
+        with open(path, "r+b") as f:
+            f.truncate(good_end)
+            f.flush()
+            os.fsync(f.fileno())
+        self._quarantine_torn_tail(dataset, path, good_end, discarded)
+
+    def _quarantine_torn_tail(self, dataset: str, path: Path, offset: int, discarded: bytes) -> None:
+        quarantine_path = self.root / "quarantine" / dataset / path.name
+        quarantine_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "dataset": dataset,
+            "file": str(path),
+            "offset": offset,
+            "discarded": discarded.decode("utf-8", errors="replace"),
+            "reason": "torn_tail_on_writer_open",
+        }
+        line = (canonical_json(record) + "\n").encode("utf-8")
+        fd = os.open(quarantine_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, line)
+            os.fsync(fd)
+        finally:
+            os.close(fd)

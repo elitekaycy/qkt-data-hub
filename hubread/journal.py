@@ -52,8 +52,10 @@ def read_range(root: Path, dataset: str, known_from: int, known_to: int) -> list
     quietly produce an incomplete-but-plausible-looking answer.
     """
     out: list[Record] = []
+    from_day = day_str(known_from)
+    to_day = day_str(known_to)
     for path in list_day_files(root, dataset):
-        if path.stem < day_str(known_from) or path.stem > day_str(known_to):
+        if path.stem < from_day or path.stem > to_day:
             continue
         text = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.split("\n"), start=1):
@@ -78,6 +80,12 @@ class JournalTail:
     leave a trailing line with no terminating newline, and that line is not yet a fact until
     the newline lands. Both are handled by tracking a byte offset into the current day file and
     only ever consuming up to the last complete line seen.
+
+    A trailing remainder is only ever given the benefit of the doubt on the NEWEST day file --
+    the one the writer could still be appending to. A remainder in an older day file, once a
+    later day file exists, is orphaned by definition: day files are dated by `known_at` and a
+    writer only moves forward, so nothing will ever complete that fragment. Blocking on it would
+    starve every later day forever, so it is counted into `skipped` once and the tail moves on.
     """
 
     def __init__(self, root: Path, dataset: str, from_seq: int = 0) -> None:
@@ -121,7 +129,12 @@ class JournalTail:
                 out.append(record)
                 self.last_seq = record.seq
             has_next_day = self._index + 1 < len(self._days)
-            if has_next_day and not remainder:
+            if has_next_day:
+                if remainder:
+                    # This day file is superseded and will never be written to again, so a
+                    # trailing fragment here is orphaned, not merely incomplete -- count it
+                    # once and move on rather than blocking every later day on it forever.
+                    self.skipped += 1
                 self._index += 1
                 self._offset = 0
                 continue

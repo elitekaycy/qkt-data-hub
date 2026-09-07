@@ -5,6 +5,7 @@ strictly increasing per-dataset counter that survives a writer restart, only one
 hold a root at a time, a line is either fully written or treated as not-yet-written, and a
 live tail never raises on a single bad line while a historical read never silently drops one.
 """
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -85,6 +86,37 @@ class JournalWriterTest(unittest.TestCase):
             p2 = journal_path(root, BASE["dataset"], "2025-09-08")
             self.assertTrue(p1.exists())
             self.assertTrue(p2.exists())
+
+
+class JournalWriterRepairTest(unittest.TestCase):
+    def test_torn_tail_is_repaired_and_quarantined_on_writer_open(self):
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            with JournalWriter(root) as w:
+                w.append(make(known_at=BASE["known_at"]))
+            path = journal_path(root, BASE["dataset"], "2025-09-07")
+
+            torn = make(known_at=BASE["known_at"] + 1000).replace(seq=2).with_id()
+            full_line = torn.to_json() + "\n"
+            fragment = full_line[: len(full_line) // 2]
+            with open(path, "a") as f:
+                f.write(fragment)
+
+            with JournalWriter(root) as w2:
+                r3 = w2.append(make(known_at=BASE["known_at"] + 2000))
+                # The torn record was never committed, so seq resumes right after the one
+                # complete record on disk rather than after the fragment's intended seq.
+                self.assertEqual(r3.seq, 2)
+
+            recs = read_range(root, BASE["dataset"], BASE["known_at"], BASE["known_at"] + 999_999)
+            self.assertEqual([r.seq for r in recs], [1, 2])
+
+            quarantine_path = root / "quarantine" / BASE["dataset"] / "2025-09-07.ndjson"
+            self.assertTrue(quarantine_path.exists())
+            entry = json.loads(quarantine_path.read_text().splitlines()[0])
+            self.assertEqual(entry["reason"], "torn_tail_on_writer_open")
+            self.assertEqual(entry["dataset"], BASE["dataset"])
+            self.assertEqual(entry["discarded"], fragment)
 
 
 class ReadRangeTest(unittest.TestCase):
@@ -174,6 +206,30 @@ class JournalTailTest(unittest.TestCase):
                 w.append(make(known_at=BASE["known_at"] + 1000))
             tail = JournalTail(root, BASE["dataset"], from_seq=1)
             self.assertEqual([r.seq for r in tail.poll()], [2])
+
+    def test_orphaned_partial_line_in_superseded_day_does_not_starve_later_day(self):
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            with JournalWriter(root) as w:
+                w.append(make(known_at=BASE["known_at"]))
+            path1 = journal_path(root, BASE["dataset"], "2025-09-07")
+            torn = make(known_at=BASE["known_at"] + 1000).replace(seq=2).with_id()
+            fragment = (torn.to_json() + "\n")[:10]
+            with open(path1, "a") as f:
+                f.write(fragment)
+
+            # Written directly to the file, bypassing the writer's repair-on-open, so day 1
+            # is left with a permanently orphaned fragment while day 2 already has a complete,
+            # well-formed record.
+            day2_record = make(known_at=BASE["known_at"] + 86_400_000).replace(seq=2).with_id()
+            path2 = journal_path(root, BASE["dataset"], "2025-09-08")
+            path2.parent.mkdir(parents=True, exist_ok=True)
+            path2.write_text(day2_record.to_json() + "\n")
+
+            tail = JournalTail(root, BASE["dataset"])
+            got = tail.poll()
+            self.assertEqual([r.seq for r in got], [1, 2])
+            self.assertEqual(tail.skipped, 1)
 
 
 if __name__ == "__main__":
