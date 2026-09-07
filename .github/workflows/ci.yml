@@ -120,11 +120,12 @@ jobs:
           [ "$before" = "$after" ] || { echo "::error::re-collect grew the journal ($before -> $after)"; exit 1; }
 
           # A tampered snapshot must make verify fail. A verify that cannot fail proves nothing.
-          python3 - <<'PY'
-          import glob, pathlib
-          p = pathlib.Path(glob.glob("smoke/data/snapshot/cal.high_impact/*/*.qkh")[0])
-          b = bytearray(p.read_bytes()); b[len(b)//2] ^= 0xFF; p.write_bytes(bytes(b))
-          PY
+          # Tamper from inside a container as root: the store is written by the image's
+          # non-root user, so the runner's own account cannot modify it.
+          docker run --rm --user 0 --entrypoint python \
+            -v "$PWD/smoke/data:/data" qkt-data-hub:ci -c \
+            "import glob,pathlib; p=pathlib.Path(glob.glob('/data/snapshot/*/*/*.qkh')[0]); \
+             b=bytearray(p.read_bytes()); b[len(b)//2]^=0xFF; p.write_bytes(bytes(b)); print('tampered', p)"
           if run verify; then echo "::error::verify passed a tampered snapshot"; exit 1; fi
           echo "docker smoke passed"
 
