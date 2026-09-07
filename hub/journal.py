@@ -10,12 +10,23 @@ from __future__ import annotations
 
 import fcntl
 import os
+from collections import OrderedDict
 from pathlib import Path
 from types import TracebackType
 
 from hub.errors import RecordError, StoreError
 from hub.record import Record, canonical_json
 from hubread.journal import day_str, journal_path, list_day_files
+
+# A one-pass historical backfill spanning years touches one journal file per calendar day --
+# multiple thousands for a multi-year daily series. Keeping every one of those descriptors open
+# for the writer's whole lifetime, as a naive cache would, exhausts a process's file-descriptor
+# limit (1024 by default inside a container) well before the backfill finishes, and it fails
+# with an OS error partway through the dataset, leaving an incomplete journal. Capping the cache
+# and evicting the least-recently-used file bounds memory and descriptors regardless of how many
+# distinct days a run touches, while a live collector -- which only ever writes today's file --
+# never evicts anything at all.
+_MAX_OPEN_JOURNAL_FDS = 128
 
 
 class JournalWriter:
@@ -26,10 +37,10 @@ class JournalWriter:
     silently interleaving `seq` values with this one. On open, before any append, it repairs
     every dataset's journal files: a torn trailing line left by a process that died mid
     `os.write` is truncated off and preserved in quarantine, so a restart never concatenates a
-    new record onto a dead fragment and produces one unparseable line forever. Each dataset's
-    file descriptor is then opened once, in append mode, and reused; every write is a single
-    `os.write` of a complete line followed by an `fsync`, so a reader can never observe a line
-    that is neither fully absent nor fully present.
+    new record onto a dead fragment and produces one unparseable line forever. Each day file's
+    descriptor is opened in append mode and cached for reuse, up to `_MAX_OPEN_JOURNAL_FDS`
+    least-recently-used; every write is a single `os.write` of a complete line followed by an
+    `fsync`, so a reader can never observe a line that is neither fully absent nor fully present.
     """
 
     def __init__(self, root: Path) -> None:
@@ -42,7 +53,7 @@ class JournalWriter:
             self._lock_file.close()
             raise StoreError(f"another writer already holds the journal at {self.root}") from e
         self._seq: dict[str, int] = {}
-        self._fds: dict[Path, int] = {}
+        self._fds: OrderedDict[Path, int] = OrderedDict()
         self._closed = False
         self._repair_torn_tails()
 
@@ -93,9 +104,14 @@ class JournalWriter:
 
     def _fd_for(self, path: Path) -> int:
         fd = self._fds.get(path)
-        if fd is None:
-            fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
-            self._fds[path] = fd
+        if fd is not None:
+            self._fds.move_to_end(path)
+            return fd
+        if len(self._fds) >= _MAX_OPEN_JOURNAL_FDS:
+            _, evicted_fd = self._fds.popitem(last=False)
+            os.close(evicted_fd)
+        fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        self._fds[path] = fd
         return fd
 
     def _next_seq(self, dataset: str) -> int:

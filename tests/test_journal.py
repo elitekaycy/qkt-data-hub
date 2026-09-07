@@ -87,6 +87,36 @@ class JournalWriterTest(unittest.TestCase):
             self.assertTrue(p1.exists())
             self.assertTrue(p2.exists())
 
+    def test_a_multi_year_backfill_does_not_exhaust_the_process_file_limit(self):
+        # A one-pass historical load spanning years touches one journal file per calendar day
+        # -- thousands for a multi-year daily series. A cache that never evicts holds every one
+        # of those descriptors open for the writer's whole lifetime and exhausts the process's
+        # limit partway through, as it did against the container default of 1024 on a real
+        # multi-year FRED backfill. Lowering the limit here well below the number of distinct
+        # days written proves the cache evicts rather than merely happening to fit today.
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        # Comfortably above the writer's own cache cap (room for stdio, the lock file and the
+        # repair pass) but far below the 1500 distinct days this test writes.
+        low_limit = 200
+        self.assertLess(low_limit, 1500, "test assumption: fewer fds than days written below")
+        resource.setrlimit(resource.RLIMIT_NOFILE, (low_limit, hard))
+        try:
+            with TemporaryDirectory() as d:
+                root = Path(d)
+                day_ms = 86_400_000
+                with JournalWriter(root) as w:
+                    for day in range(1500):
+                        w.append(make(known_at=BASE["known_at"] + day * day_ms))
+                lines = read_range(
+                    root, BASE["dataset"], BASE["known_at"], BASE["known_at"] + 1500 * day_ms
+                )
+                self.assertEqual(len(lines), 1500)
+                self.assertEqual([r.seq for r in lines], list(range(1, 1501)))
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
 
 class JournalWriterRepairTest(unittest.TestCase):
     def test_torn_tail_is_repaired_and_quarantined_on_writer_open(self):

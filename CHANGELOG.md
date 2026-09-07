@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-09-07
+
+### Fixed
+
+- **`JournalWriter` exhausted the process file-descriptor limit on a multi-year backfill.** It
+  cached one open descriptor per calendar day for its whole lifetime; a historical load spanning
+  years opens one file per day and hit the container default limit (1024) partway through,
+  failing with `OSError: Too many open files` and leaving an incomplete journal -- observed
+  loading the FRED rate series onto a fresh store. The cache is now capped at 128 descriptors,
+  least-recently-used eviction, which a live collector (writing only today's file) never reaches.
+
 ## [0.1.2] - 2026-09-07
 
 ### Added
