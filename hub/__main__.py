@@ -105,6 +105,7 @@ def collect_once(
         parser=source.parser,
         raw_ref=raw_ref,
         quarantine=Quarantine(root),
+        max_observed_age_ms=source.max_observed_age_ms,
     )
     own_writer = writer is None
     handle = writer or JournalWriter(root)

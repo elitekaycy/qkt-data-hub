@@ -54,6 +54,22 @@ class Source(Protocol):
     @property
     def parser(self) -> str: ...
 
+    @property
+    def max_observed_age_ms(self) -> int | None:
+        """How far into the past a live poll may claim a fact as newly observed, or `None`.
+
+        A source that always returns its provider's *entire* history (a CSV endpoint with no
+        incremental mode, for instance) hands the pipeline candidates spanning years on every
+        poll. Journaling all of that as `observed` would claim we just learned a 1962 value
+        today -- a fabricated `known_at`, which is exactly what this project exists to refuse.
+        `None` means the source's own candidates are never implausibly old (an event feed that
+        only ever reports what is happening now); a bulk source declares a bound instead, and
+        `ingest` quarantines anything older than it during live collection. Backfill is
+        unaffected -- a backfilled record's honesty rests on its `derived` availability, not on
+        this check.
+        """
+        ...
+
     def fetch(self, timeout_seconds: float) -> RawBlob | None: ...
 
     def parse(self, blob: RawBlob) -> list[Candidate]: ...

@@ -6,4 +6,4 @@ alone and can decode every artifact the hub writes. The hub imports it rather th
 way round, so the writer and the reader cannot drift apart.
 """
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"

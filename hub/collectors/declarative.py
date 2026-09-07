@@ -31,6 +31,7 @@ _COLLECTOR_KEYS = frozenset(
         "headers",
         "cadence",
         "cadence_near_event",
+        "max_observed_age",
         "record_path",
         "where",
         "scope",
@@ -166,6 +167,10 @@ class DeclarativeSource:
             self._fields[name] = _reject_unknown(f"{dataset}.collector.fields.{name}", spec, _FIELD_KEYS)
         self._availability = Availability(str(block.get("availability", "observed")))
         self._csv_value_column = block.get("csv_value_column")
+        max_age = block.get("max_observed_age")
+        self._max_observed_age_ms: int | None = (
+            None if max_age is None else int(duration_seconds(max_age, f"{dataset}.collector.max_observed_age") * 1000)
+        )
         near = block.get("cadence_near_event")
         near_block = _reject_unknown(f"{dataset}.collector.cadence_near_event", near, _NEAR_EVENT_KEYS) if near else {}
         self.cadence = Cadence(
@@ -183,6 +188,10 @@ class DeclarativeSource:
     @property
     def parser(self) -> str:
         return f"decl/{self._kind}@1"
+
+    @property
+    def max_observed_age_ms(self) -> int | None:
+        return self._max_observed_age_ms
 
     @property
     def url(self) -> str:

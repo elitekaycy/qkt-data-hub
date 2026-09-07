@@ -5,11 +5,20 @@ against the schema, derive, deduplicate, then stamp availability. Only the last 
 clock, and only the writer touches disk. That split is what lets the whole pipeline be re-run
 over the raw archive to produce corrected revisions rather than edited history.
 
-Two rules here are load-bearing and easy to lose in a refactor. Live collection always stamps
+Three rules here are load-bearing and easy to lose in a refactor. Live collection always stamps
 `observed` from the ingest clock, never a timestamp the provider suggested -- a source telling us
-when we knew something is a source we have to trust about our own past. And a record whose
+when we knew something is a source we have to trust about our own past. A record whose
 `known_at` runs ahead of the writer's clock is quarantined rather than stored, because a
 mis-clocked hub would otherwise publish facts from the future that every consumer would honour.
+And a live candidate describing a fact older than its source's declared `max_observed_age_ms` is
+quarantined too: a source with no incremental fetch mode (a CSV endpoint that always returns its
+provider's whole history, say) would otherwise claim to have *just observed* a decades-old value
+every time it is polled, fabricating `known_at` in the other temporal direction. Both stamp checks
+also share a subtler failure this project has already hit: `derive`'s history for a scope is
+walked in the order candidates are appended, and a live batch spanning years interleaves ahead of
+or behind whatever the store already holds for that range, scrambling every `lag`/`diff`/`zscore`
+computed from it. Rejecting the stale candidates before they reach `derive` is what keeps that
+walk in the single direction it assumes.
 """
 from __future__ import annotations
 
@@ -109,12 +118,16 @@ def ingest(
     quarantine: Quarantine | None = None,
     live: bool = True,
     skew_tolerance_ms: int = DEFAULT_SKEW_TOLERANCE_MS,
+    max_observed_age_ms: int | None = None,
     clock: Callable[[], int] | None = None,
 ) -> IngestResult:
     """Run one batch of candidates through every stage and return what survived.
 
     `history` is keyed by scope so a z-score of a US surprise is never computed across EUR
     observations; the caller owns it across batches so derivations see the dataset's real past.
+    `max_observed_age_ms` is the source's own `Source.max_observed_age_ms` (see that protocol
+    member); it is ignored for a backfill (`live=False`), which exists specifically to submit
+    old facts honestly, stamped `derived`.
     """
     result = IngestResult()
     wall = clock() if clock is not None else now_ms
@@ -124,6 +137,12 @@ def ingest(
             availability = Availability.OBSERVED if live else candidate.availability
             if live:
                 known_at = now_ms
+                if max_observed_age_ms is not None and wall - candidate.effective_at > max_observed_age_ms:
+                    raise HubError(
+                        f"effective_at {candidate.effective_at} is more than "
+                        f"{max_observed_age_ms}ms old; this source cannot claim to have just "
+                        "observed it live -- backfill it instead"
+                    )
             if known_at > wall + skew_tolerance_ms:
                 raise HubError(f"known_at {known_at} runs ahead of the writer clock {wall}")
             key = build_key(schema, candidate)

@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-09-07
+
+### Fixed
+
+- **A live collect against an already-backfilled bulk-history source silently corrupted
+  derived fields.** `rates.us.dfii10` and its five siblings fetch their provider's *entire*
+  series on every poll (FRED's CSV endpoint has no incremental mode); running `collect`/`run`
+  against them after backfilling 2018-2026 stamped decades of already-known history as
+  `observed` today, and `derive`'s per-scope history -- a list built by appending candidates in
+  the order they are processed -- was scrambled by the older-and-overlapping batch: 1058 of
+  2264 already-correct `rates.us.dfii10` records were silently revised with a fabricated
+  `change_1d`, and `verify` did not catch it because the compiler's own re-derivation walks
+  history the same way. A new `Source.max_observed_age_ms` (declared per collector as
+  `max_observed_age`) lets `ingest` quarantine, rather than journal, a live candidate whose
+  `effective_at` is older than a source can honestly claim to have just observed. Set to 14
+  days on the five daily/near-daily FRED datasets and 45 days on the monthly
+  `rates.us.fedfunds`; unset (as before) on `cal.high_impact` and `pos.cftc.cot_gold`, whose
+  collectors already request only recent data. Backfill is unaffected -- the check applies only
+  to live (`observed`) collection.
+
 ## [0.1.3] - 2026-09-07
 
 ### Fixed

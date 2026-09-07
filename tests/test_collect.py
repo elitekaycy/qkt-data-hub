@@ -15,6 +15,7 @@ import threading
 import unittest
 from typing import Any
 
+from hub.collectors import Candidate
 from hub.collectors.declarative import DeclarativeSource, duration_seconds
 from hub.collectors.http import HttpSource
 from hub.dedupe import RevisionIndex
@@ -27,7 +28,9 @@ from hubread.errors import ConfigError, StoreError
 from hubread.record import Availability
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
-CALENDAR = pathlib.Path(__file__).resolve().parents[1] / "datasets" / "cal.high_impact.yaml"
+DATASETS = pathlib.Path(__file__).resolve().parents[1] / "datasets"
+CALENDAR = DATASETS / "cal.high_impact.yaml"
+REAL_YIELD = DATASETS / "rates.us.dfii10.yaml"
 
 
 def _serve(body: bytes, content_type: str, status: int = 200) -> tuple[str, Any]:
@@ -255,6 +258,136 @@ class PipelineTest(unittest.TestCase):
         candidate = self.candidates[0]
         self.assertEqual(build_key(self.schema, candidate), build_key(self.schema, candidate))
         self.assertNotIn(str(self.now), build_key(self.schema, candidate))
+
+
+class MaxObservedAgeTest(unittest.TestCase):
+    """A source with no incremental fetch mode -- an http_csv endpoint that always returns its
+    provider's whole history, as every FRED collector here does -- hands the pipeline candidates
+    spanning decades on every poll. Journaling all of that as `observed` fabricates `known_at`
+    for every date but the newest, and it does something worse: `derive`'s per-scope history is
+    a list appended to in candidate order, so a batch spanning years, run against a scope that
+    already has backfilled history, interleaves ahead of or behind what is already stored and
+    scrambles every `diff`/`lag`/`zscore` computed from it. This was found by actually deploying
+    the hub: `rates.us.dfii10` is a real dataset with a real `diff(value, 1)` field, backfilled
+    for 2018-2026 and then live-collected once against the full FRED series back to 1962 -- 1058
+    of 2264 already-correct records were silently revised with a fabricated `change_1d`, all of
+    it passing `verify` because the compiler's own re-derivation walks history the same way.
+    `max_observed_age_ms` exists to make that batch never reach `derive` in the first place.
+    """
+
+    DAY_MS = 86_400_000
+
+    def setUp(self) -> None:
+        self.schema = load_schema(REAL_YIELD)
+        # Four consecutive trading days plus one candidate decades earlier, standing in for the
+        # oldest rows a full-history CSV refetch would include.
+        self.day1 = 1_514_851_200_000  # 2018-01-02T00:00:00Z
+        self.day2 = self.day1 + self.DAY_MS
+        self.day3 = self.day2 + self.DAY_MS
+        self.day4 = self.day3 + self.DAY_MS
+        self.ancient = 1_262_563_200_000  # 2010-01-04T00:00:00Z -- 8 years before day 1
+
+    def _candidate(self, period_start: int, value: str, known_at: int) -> Candidate:
+        return Candidate(
+            scope="USD",
+            key="",
+            effective_at=period_start,
+            fields={"value": value},
+            period_start=period_start,
+            known_at=known_at,
+            availability=Availability.DERIVED,
+        )
+
+    def _backfill(self) -> tuple[RevisionIndex, dict]:
+        """Seed index/history exactly as `_history_for` would after a real backfill: three
+        ascending trading days, each with a genuinely staggered `known_at`."""
+        candidates = [
+            self._candidate(self.day1, "1.00", self.day1 + self.DAY_MS),
+            self._candidate(self.day2, "1.10", self.day2 + self.DAY_MS),
+            self._candidate(self.day3, "1.20", self.day3 + self.DAY_MS),
+        ]
+        index, history = RevisionIndex(), {}
+        result = ingest(
+            candidates, self.schema, index, history, self.day3 + 2 * self.DAY_MS, source="fred", live=False
+        )
+        self.assertEqual(result.written, 3)
+        return index, history
+
+    def _day1_change_1d(self, index: RevisionIndex, history: dict) -> str | None:
+        # Re-derive nothing; read straight off what ingest already computed and stored. Day 1
+        # is always the first entry appended for this scope.
+        return history["USD"][0]["change_1d"]
+
+    def test_backfill_alone_leaves_the_first_day_with_no_prior(self) -> None:
+        index, history = self._backfill()
+        self.assertIsNone(self._day1_change_1d(index, history))
+
+    def test_an_unbounded_wide_batch_corrupts_already_backfilled_history(self) -> None:
+        # Pins the exact failure observed in production: with no bound, the ancient candidate
+        # is appended ahead of nothing (it is new), but by the time the batch revisits day 1,
+        # `scope_history[-1]` is now the ancient row instead of "no prior" -- the earliest
+        # legitimate observation acquires a fabricated change.
+        index, history = self._backfill()
+        wide_batch = [
+            self._candidate(self.ancient, "5.00", 0),
+            self._candidate(self.day1, "1.00", 0),
+            self._candidate(self.day2, "1.10", 0),
+            self._candidate(self.day3, "1.20", 0),
+            self._candidate(self.day4, "1.30", 0),
+        ]
+        now = self.day4 + 1_000
+        result = ingest(wide_batch, self.schema, index, history, now, source="fred", live=True)
+        self.assertGreater(result.revisions, 0)
+        day1_revision = index.seen(self.schema.name, f"{build_key(self.schema, wide_batch[1])}")
+        self.assertIsNotNone(day1_revision)
+        self.assertGreater(day1_revision[0], 1, "day 1 should not have been revised at all")
+
+    def test_max_observed_age_rejects_the_stale_candidates_and_leaves_history_intact(self) -> None:
+        index, history = self._backfill()
+        wide_batch = [
+            self._candidate(self.ancient, "5.00", 0),
+            self._candidate(self.day1, "1.00", 0),
+            self._candidate(self.day2, "1.10", 0),
+            self._candidate(self.day3, "1.20", 0),
+            self._candidate(self.day4, "1.30", 0),
+        ]
+        now = self.day4 + 1_000
+        root = pathlib.Path(tempfile.mkdtemp())
+        result = ingest(
+            wide_batch,
+            self.schema,
+            index,
+            history,
+            now,
+            source="fred",
+            live=True,
+            max_observed_age_ms=12 * 3_600_000,  # 12h: rejects anything a day or more old
+            quarantine=Quarantine(root),
+        )
+        self.assertEqual(result.written, 1, "only day 4 is recent enough to be live-observed")
+        self.assertEqual(result.quarantined, 4)
+        self.assertEqual(result.revisions, 0, "the three already-backfilled days must stay untouched")
+        day1_key = build_key(self.schema, wide_batch[1])
+        self.assertEqual(index.seen(self.schema.name, day1_key)[0], 1)
+        day4_record = result.records[0]
+        self.assertEqual(day4_record.fields["change_1d"], "0.1")
+
+    def test_backfill_is_never_subject_to_the_age_bound(self) -> None:
+        # The whole point of `backfill` is submitting old facts honestly, stamped `derived`; the
+        # guard only ever applies to a live (`observed`) collect.
+        index, history = RevisionIndex(), {}
+        result = ingest(
+            [self._candidate(self.ancient, "1.00", self.ancient + self.DAY_MS)],
+            self.schema,
+            index,
+            history,
+            self.ancient + self.DAY_MS,
+            source="fred",
+            live=False,
+            max_observed_age_ms=1,
+        )
+        self.assertEqual(result.written, 1)
+        self.assertEqual(result.quarantined, 0)
 
 
 class RegistryTest(unittest.TestCase):

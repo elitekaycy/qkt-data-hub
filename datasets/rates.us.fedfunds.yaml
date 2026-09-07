@@ -1,7 +1,9 @@
 # Effective federal funds rate, monthly average (FRED series FEDFUNDS). One observation per
 # calendar month, dated the first of the month. FRED typically publishes the prior month's
 # average in the first days of the following month; the backfill lag below is conservative
-# rather than exact because the archive carries no publication timestamp.
+# rather than exact because the archive carries no publication timestamp. `max_observed_age` is
+# widened to 45 days (the other FRED series here use 14) because a freshly published monthly
+# value is already 30-plus days past its own `effective_at` by the time anyone could see it.
 dataset: rates.us.fedfunds
 version: 1
 title: Effective federal funds rate, monthly (FEDFUNDS)
@@ -11,6 +13,7 @@ collector:
   kind: http_csv
   url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS
   cadence: 6h
+  max_observed_age: 45d
   record_path: "$[*]"
   scope: { const: USD }
   effective_at: { from: observation_date, parse: date_in_zone, zone: America/New_York, hour: 16 }
