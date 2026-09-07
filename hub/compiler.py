@@ -234,7 +234,7 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
 
         manifest.datasets[name] = DatasetManifest(
             schema_hash=schema.hash(),
-            schema_path=f"datasets/{name}.yaml",
+            schema_path=str(getattr(schema, "source_path", "") or f"datasets/{name}.yaml"),
             scope_kind=schema.scope_kind,
             key=schema.key,
             fields=_field_entries(schema),
@@ -247,7 +247,7 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
     return manifest
 
 
-def verify(root: Path | str) -> list[str]:
+def verify(root: Path | str, registry: object | None = None) -> list[str]:
     """Recompiles every window the manifest at `root` knows about and reports every problem
     found, so a fleet health check can distinguish "clean" (empty list) from every way a compiled
     store can rot: a snapshot whose on-disk bytes no longer match its manifest hash (bit rot, a
@@ -264,12 +264,29 @@ def verify(root: Path | str) -> list[str]:
     problems: list[str] = []
 
     for name, dataset_manifest in manifest.datasets.items():
-        schema_path = root / dataset_manifest.schema_path
-        try:
-            schema = load_schema(schema_path)
-        except (SchemaError, OSError) as e:
-            problems.append(f"{name}: cannot load schema at {schema_path}: {e}")
-            continue
+        # Prefer a schema the caller already loaded. The recorded path is a fallback for an
+        # audit run against a store whose dataset directory is not to hand, and it is resolved
+        # as given before being resolved against the root, because datasets commonly live
+        # outside the store they populate.
+        schema = None
+        if registry is not None:
+            try:
+                schema = registry.schema(name)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 - an unknown dataset just falls back to the path
+                schema = None
+        if schema is None:
+            recorded = Path(dataset_manifest.schema_path)
+            candidates = [recorded, root / recorded]
+            for candidate in candidates:
+                try:
+                    schema = load_schema(candidate)
+                    break
+                except (SchemaError, OSError):
+                    continue
+            if schema is None:
+                tried = " or ".join(str(c) for c in candidates)
+                problems.append(f"{name}: cannot load schema at {tried}")
+                continue
 
         for entry in dataset_manifest.windows:
             label = f"{name} window {entry.from_day}_{entry.to_day}"

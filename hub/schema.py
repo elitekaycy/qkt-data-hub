@@ -97,6 +97,7 @@ class DatasetSchema:
     quality: dict[str, Any]
     derived_order: tuple[str, ...]
     raw: dict[str, Any] = field(repr=False)
+    source_path: str = ""
 
     def hash(self) -> str:
         """Content address of the schema: changes whenever any declared byte of meaning does,
@@ -391,4 +392,5 @@ def load_schema(path: Path) -> DatasetSchema:
         quality=quality,
         derived_order=derived_order,
         raw=doc,
+        source_path=str(Path(path).resolve()),
     )
