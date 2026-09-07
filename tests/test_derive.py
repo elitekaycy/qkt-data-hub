@@ -7,7 +7,7 @@ load, not silently return null forever in production.
 """
 import unittest
 
-from hub.derive import compile_expr, referenced_names
+from hub.derive import RESERVED_EXPRESSION_NAMES, compile_expr, referenced_names
 from hub.errors import SchemaError
 
 
@@ -39,7 +39,7 @@ class DeriveTest(unittest.TestCase):
             compile_expr("magic(actual)")
 
     def test_bare_function_name_fails_at_compile_time(self) -> None:
-        with self.assertRaisesRegex(SchemaError, "unknown"):
+        with self.assertRaisesRegex(SchemaError, "reserved function name"):
             compile_expr("zscore + 1")
 
     def test_unary_minus_and_parentheses(self) -> None:
@@ -81,6 +81,27 @@ class DeriveTest(unittest.TestCase):
 
     def test_referenced_names_from_function_calls(self) -> None:
         self.assertEqual(referenced_names("lag(actual, 1)"), frozenset({"actual"}))
+
+    def test_overflow_yields_none_not_exception(self) -> None:
+        f = compile_expr("actual * forecast")
+        self.assertIsNone(f({"actual": "1e500000", "forecast": "1e500000"}, []))
+
+    def test_reserved_names_match_supported_functions(self) -> None:
+        self.assertEqual(RESERVED_EXPRESSION_NAMES, {"zscore", "lag", "diff", "pct_rank", "since", "until"})
+
+    def test_zscore_keyword_args_accepted_in_either_order(self) -> None:
+        history = [{"surprise": str(v)} for v in (0, 0, 0, 1, -1)]
+        forward = compile_expr("zscore(surprise, window=5, min_obs=4)")
+        reversed_order = compile_expr("zscore(surprise, min_obs=4, window=5)")
+        payload = {"surprise": "2"}
+        self.assertEqual(forward(payload, history), reversed_order(payload, history))
+
+    def test_zscore_computes_on_partial_window_above_min_obs(self) -> None:
+        # History is shorter than the requested window (5) but at or above min_obs (3): the
+        # z-score must be computed on the partial window, not withheld as if data were missing.
+        history = [{"surprise": str(v)} for v in (0, 0, 1)]
+        f = compile_expr("zscore(surprise, window=5, min_obs=3)")
+        self.assertIsNotNone(f({"surprise": "2"}, history))
 
 
 if __name__ == "__main__":

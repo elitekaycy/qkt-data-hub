@@ -14,16 +14,24 @@ functions, so a compiled expression's set of possible behaviors can be reasoned 
 the schema alone.
 
 Two invariants hold everywhere: a `None` (missing) input anywhere makes the whole expression
-`None` -- missing data must never quietly become zero -- and a division by zero yields `None`
-rather than raising, because a schema author should not have to prove a denominator is nonzero
-for every record that will ever exist.
+`None` -- missing data must never quietly become zero -- and any arithmetic failure (division by
+zero, overflow, underflow, or any other `decimal` signal the fixed context traps) yields `None`
+rather than raising, because a schema author should not have to prove a denominator is nonzero,
+or a product bounded, for every record that will ever exist.
+
+Contract for `since`/`until`: there is no external clock available to a pure expression, so both
+functions read `known_at` from the PAYLOAD MAPPING passed into the compiled `Expr` at evaluation
+time -- not from any `Record` envelope object. The caller (the pipeline that evaluates derived
+fields against a dataset's records) is responsible for merging the record's envelope `known_at`
+into the payload dict it hands to a compiled expression; without that, `since`/`until` return
+`None` rather than guessing a reference time.
 """
 from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Context, Decimal, DivisionByZero, InvalidOperation
+from decimal import Context, Decimal, DivisionByZero, InvalidOperation, Overflow, Underflow
 
 from hubread.errors import SchemaError
 from hubread.record import decimal_str
@@ -31,6 +39,12 @@ from hubread.record import decimal_str
 #: The arithmetic context every derived-field evaluation shares. A fixed precision means the
 #: same expression produces the same digits regardless of which host or Python build runs it.
 CTX = Context(prec=28)
+
+#: Every `decimal` signal that a fixed context can raise out of ordinary arithmetic (division by
+#: zero, an invalid combination such as 0/0, overflow past `Emax`, or underflow past `Emin`).
+#: Caught wherever this module performs arithmetic, so a compiled `Expr` never raises on bad
+#: numbers -- it returns `None`, the same way it does for missing data.
+_ARITH_ERRORS = (DivisionByZero, InvalidOperation, Overflow, Underflow)
 
 #: What the caller passes an evaluated expression: the current payload, and prior payloads for
 #: the same dataset/key in ascending `known_at` order (oldest first).
@@ -41,6 +55,12 @@ History = Sequence[Payload]
 #: over nothing but the parsed expression tree -- no reference back to the source text.
 Expr = Callable[[Payload, History], "str | None"]
 
+#: The function names this language reserves. A schema loader should check a dataset's declared
+#: field names against this set at load time and reject a collision there -- with a clear error
+#: naming the field -- rather than let a schema author discover the collision only when an
+#: expression referencing that field name is rejected as "unknown" the first time it is used.
+RESERVED_EXPRESSION_NAMES = frozenset({"zscore", "lag", "diff", "pct_rank", "since", "until"})
+
 _TOKEN_RE = re.compile(
     r"""
     (?P<NUMBER>\d+(\.\d+)?)
@@ -50,8 +70,6 @@ _TOKEN_RE = re.compile(
     """,
     re.VERBOSE,
 )
-
-_FUNCTIONS = frozenset({"zscore", "lag", "diff", "pct_rank", "since", "until"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +119,8 @@ class _Node:
 
 @dataclass(frozen=True, slots=True)
 class _Literal(_Node):
+    """A decimal literal parsed straight from the expression text; it reads no field."""
+
     value: Decimal
 
     def names(self) -> frozenset[str]:
@@ -112,6 +132,8 @@ class _Literal(_Node):
 
 @dataclass(frozen=True, slots=True)
 class _FieldRef(_Node):
+    """A bare field name; evaluates to that field's value in the current payload, or `None`."""
+
     name: str
 
     def names(self) -> frozenset[str]:
@@ -123,6 +145,8 @@ class _FieldRef(_Node):
 
 @dataclass(frozen=True, slots=True)
 class _Unary(_Node):
+    """Unary minus: negates its operand, or propagates `None`/an arithmetic failure as `None`."""
+
     operand: _Node
 
     def names(self) -> frozenset[str]:
@@ -130,11 +154,20 @@ class _Unary(_Node):
 
     def eval(self, payload: Payload, history: History) -> Decimal | None:
         value = self.operand.eval(payload, history)
-        return None if value is None else CTX.minus(value)
+        if value is None:
+            return None
+        try:
+            return CTX.minus(value)
+        except _ARITH_ERRORS:
+            return None
 
 
 @dataclass(frozen=True, slots=True)
 class _BinOp(_Node):
+    """One of `+ - * /` applied to two subexpressions, total over missing input and bad
+    arithmetic alike: either operand being `None`, or the operation itself failing (division by
+    zero, overflow, underflow), yields `None` rather than raising."""
+
     op: str
     left: _Node
     right: _Node
@@ -156,7 +189,7 @@ class _BinOp(_Node):
                 return CTX.multiply(left, right)
             if self.op == "/":
                 return CTX.divide(left, right)
-        except (DivisionByZero, InvalidOperation):
+        except _ARITH_ERRORS:
             return None
         raise AssertionError(f"unreachable operator {self.op!r}")
 
@@ -183,7 +216,10 @@ class _Call(_Node):
             prior = _lag(self.field, n, history)
             if current is None or prior is None:
                 return None
-            return CTX.subtract(current, prior)
+            try:
+                return CTX.subtract(current, prior)
+            except _ARITH_ERRORS:
+                return None
         if self.func == "zscore":
             window, min_obs = self.int_args
             return _zscore(self.field, window, min_obs, payload, history)
@@ -210,7 +246,7 @@ def _to_decimal(value: object) -> Decimal | None:
         return None
     try:
         return CTX.create_decimal(str(value))
-    except InvalidOperation:
+    except _ARITH_ERRORS:
         return None
 
 
@@ -252,20 +288,23 @@ def _zscore(field: str, window: int, min_obs: int, payload: Payload, history: Hi
     values = _recent_window(field, window, history)
     if current is None or values is None or len(values) < min_obs or len(values) < 2:
         return None
-    n = len(values)
-    total = Decimal(0)
-    for v in values:
-        total = CTX.add(total, v)
-    mean = CTX.divide(total, Decimal(n))
-    variance_num = Decimal(0)
-    for v in values:
-        delta = CTX.subtract(v, mean)
-        variance_num = CTX.add(variance_num, CTX.multiply(delta, delta))
-    variance = CTX.divide(variance_num, Decimal(n - 1))
-    stdev = variance.sqrt(CTX)
-    if stdev == 0:
+    try:
+        n = len(values)
+        total = Decimal(0)
+        for v in values:
+            total = CTX.add(total, v)
+        mean = CTX.divide(total, Decimal(n))
+        variance_num = Decimal(0)
+        for v in values:
+            delta = CTX.subtract(v, mean)
+            variance_num = CTX.add(variance_num, CTX.multiply(delta, delta))
+        variance = CTX.divide(variance_num, Decimal(n - 1))
+        stdev = variance.sqrt(CTX)
+        if stdev == 0:
+            return None
+        return CTX.divide(CTX.subtract(current, mean), stdev)
+    except _ARITH_ERRORS:
         return None
-    return CTX.divide(CTX.subtract(current, mean), stdev)
 
 
 def _pct_rank(field: str, window: int, payload: Payload, history: History) -> Decimal | None:
@@ -278,7 +317,10 @@ def _pct_rank(field: str, window: int, payload: Payload, history: History) -> De
     if values is None or current is None or len(values) == 0:
         return None
     below = sum(1 for v in values if v < current)
-    return CTX.divide(Decimal(below), Decimal(len(values)))
+    try:
+        return CTX.divide(Decimal(below), Decimal(len(values)))
+    except _ARITH_ERRORS:
+        return None
 
 
 def _since_until(field: str, sign: int, payload: Payload) -> Decimal | None:
@@ -295,9 +337,12 @@ def _since_until(field: str, sign: int, payload: Payload) -> Decimal | None:
     ts = _to_decimal(payload.get(field))
     if known_at is None or ts is None:
         return None
-    if sign > 0:
-        return CTX.subtract(known_at, ts)
-    return CTX.subtract(ts, known_at)
+    try:
+        if sign > 0:
+            return CTX.subtract(known_at, ts)
+        return CTX.subtract(ts, known_at)
+    except _ARITH_ERRORS:
+        return None
 
 
 # -- parser ---------------------------------------------------------------------------------
@@ -384,14 +429,17 @@ class _Parser:
             nxt = self._peek()
             if nxt is not None and nxt.kind == "OP" and nxt.text == "(":
                 return self._call(tok)
-            if tok.text in _FUNCTIONS:
-                raise SchemaError(f"unknown name {tok.text!r}: it is a function, not a field, in {self._source!r}")
+            if tok.text in RESERVED_EXPRESSION_NAMES:
+                raise SchemaError(
+                    f"{tok.text!r} is a reserved function name and cannot be used as a field "
+                    f"reference, in expression {self._source!r}"
+                )
             return _FieldRef(tok.text)
         raise SchemaError(f"unexpected token {tok.text!r} in expression {self._source!r}")
 
     def _call(self, name_tok: _Token) -> _Node:
         func = name_tok.text
-        if func not in _FUNCTIONS:
+        if func not in RESERVED_EXPRESSION_NAMES:
             raise SchemaError(f"unknown function {func!r} in expression {self._source!r}")
         self._expect_op("(")
         field_tok = self._advance()
@@ -408,13 +456,12 @@ class _Parser:
             return (self._positional_int(),)
         if func == "zscore":
             self._expect_op(",")
-            window = self._named_int("window")
-            self._expect_op(",")
-            min_obs = self._named_int("min_obs")
-            return (window, min_obs)
+            kwargs = self._named_int_kwargs(frozenset({"window", "min_obs"}))
+            return (kwargs["window"], kwargs["min_obs"])
         if func == "pct_rank":
             self._expect_op(",")
-            return (self._named_int("window"),)
+            kwargs = self._named_int_kwargs(frozenset({"window"}))
+            return (kwargs["window"],)
         if func in ("since", "until"):
             return ()
         raise AssertionError(f"unreachable function {func!r}")
@@ -425,12 +472,34 @@ class _Parser:
             raise SchemaError(f"expected an integer argument, found {tok.text!r} in {self._source!r}")
         return int(tok.text)
 
-    def _named_int(self, name: str) -> int:
-        name_tok = self._advance()
-        if name_tok.kind != "NAME" or name_tok.text != name:
-            raise SchemaError(f"expected keyword argument {name!r}, found {name_tok.text!r} in {self._source!r}")
-        self._expect_op("=")
-        return self._positional_int()
+    def _named_int_kwargs(self, names: frozenset[str]) -> dict[str, int]:
+        """Parses `name=INT[, name=INT ...]` for exactly `names`, accepted in any order.
+
+        `zscore(x, min_obs=4, window=5)` and `zscore(x, window=5, min_obs=4)` must mean the same
+        thing -- a schema author should not have to memorize an internal argument order for a
+        keyword-only call. Raises on an unrecognized, duplicate, or missing keyword.
+        """
+        found: dict[str, int] = {}
+        while True:
+            name_tok = self._advance()
+            if name_tok.kind != "NAME" or name_tok.text not in names:
+                raise SchemaError(
+                    f"expected one of keyword arguments {sorted(names)}, found {name_tok.text!r} "
+                    f"in {self._source!r}"
+                )
+            if name_tok.text in found:
+                raise SchemaError(f"duplicate keyword argument {name_tok.text!r} in {self._source!r}")
+            self._expect_op("=")
+            found[name_tok.text] = self._positional_int()
+            nxt = self._peek()
+            if nxt is not None and nxt.kind == "OP" and nxt.text == ",":
+                self._advance()
+                continue
+            break
+        missing = names - found.keys()
+        if missing:
+            raise SchemaError(f"missing keyword argument(s) {sorted(missing)} in {self._source!r}")
+        return found
 
 
 # -- public API -------------------------------------------------------------------------------
