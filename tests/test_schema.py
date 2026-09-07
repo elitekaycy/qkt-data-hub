@@ -202,6 +202,56 @@ class SchemaTest(unittest.TestCase):
         with self.assertRaisesRegex(SchemaError, "type"):
             s.validate_payload({"ts": "not-an-int"})
 
+    # -- fix round 1: number-field type checking, decimal range comparison, key/derived --
+
+    def test_validate_payload_rejects_bool_for_number_field(self):
+        with self.assertRaisesRegex(SchemaError, "type"):
+            self._load(SCHEMA).validate_payload({"impact": 2, "actual": True})
+
+    def test_validate_payload_rejects_non_numeric_string_for_number_field(self):
+        with self.assertRaisesRegex(SchemaError, "not a valid number"):
+            self._load(SCHEMA).validate_payload({"impact": 2, "actual": "abc"})
+
+    def test_validate_payload_rejects_list_for_number_field(self):
+        with self.assertRaisesRegex(SchemaError, "type"):
+            self._load(SCHEMA).validate_payload({"impact": 2, "actual": [1, 2]})
+
+    def test_validate_payload_rejects_dict_for_number_field(self):
+        with self.assertRaisesRegex(SchemaError, "type"):
+            self._load(SCHEMA).validate_payload({"impact": 2, "actual": {"a": 1}})
+
+    def test_validate_payload_rejects_null_for_number_field_when_forbidden(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "cal.strict.yaml"
+            p.write_text(
+                "dataset: cal.strict\nversion: 1\ntitle: t\nscope_kind: currency\n"
+                "key: [period_start]\nfields:\n  amount: { type: number }\n"
+            )
+            s = load_schema(p)
+        with self.assertRaisesRegex(SchemaError, "null"):
+            s.validate_payload({"amount": None})
+
+    def test_quality_range_compares_as_decimal_not_float(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "macro.precise.yaml"
+            p.write_text(
+                "dataset: macro.precise\nversion: 1\ntitle: t\nscope_kind: currency\n"
+                "key: [period_start]\nfields:\n  amount: { type: number }\n"
+                "quality:\n  range: { amount: [0, 100000000000000000] }\n"
+            )
+            s = load_schema(p)
+        # Differs from the bound only beyond the 15th significant digit; float(...) collapses
+        # these to equal values and would wrongly accept it as in-range.
+        with self.assertRaisesRegex(SchemaError, "range"):
+            s.validate_payload({"amount": "100000000000000003"})
+
+    def test_rejects_derived_field_named_in_key(self):
+        with self.assertRaisesRegex(SchemaError, "derived"):
+            self._load(SCHEMA.replace(
+                "key: [period_start, scope, title]",
+                "key: [period_start, scope, surprise]",
+            ))
+
     def test_validate_payload_bool_field(self):
         with TemporaryDirectory() as d:
             p = Path(d) / "cal.flag.yaml"

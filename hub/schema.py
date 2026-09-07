@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from hub.derive import RESERVED_EXPRESSION_NAMES, referenced_names
 from hub.simpleyaml import load_path
-from hubread.errors import SchemaError
+from hubread.errors import RecordError, SchemaError
 from hubread.record import FIELD_NAME_RE, RESERVED_FIELD_NAMES, canonical_json, decimal_str
 
 #: Envelope timestamp names a derived expression may read in addition to declared fields --
@@ -111,8 +112,8 @@ class DatasetSchema:
         for name, bounds in range_map.items():
             if name in out and out[name] is not None:
                 lo, hi = bounds
-                num = float(out[name])
-                if num < float(lo) or num > float(hi):
+                num = Decimal(out[name])
+                if num < Decimal(str(lo)) or num > Decimal(str(hi)):
                     raise SchemaError(f"{self.name}: field {name!r} value {out[name]!r} out of range {bounds!r}")
         return out
 
@@ -120,9 +121,20 @@ class DatasetSchema:
         if value is None:
             if spec.null_policy == "forbid":
                 raise SchemaError(f"{self.name}: field {spec.name!r} is null but null_policy is forbid")
+            # `allow` and `allow_until_release` are both accepted here without distinction --
+            # the embargo behaviour that would make `allow_until_release` differ from `allow`
+            # (masking a null only until the dataset's scheduled release) is deliberately
+            # deferred; do not assume it is enforced anywhere yet.
             return None
         if spec.type == FieldType.NUMBER:
-            return decimal_str(value)
+            # `bool` is an `int` subclass, so it must be rejected explicitly here or `True`
+            # would sail through `decimal_str` as the number 1.
+            if isinstance(value, bool) or not isinstance(value, (int, str)):
+                raise SchemaError(f"{self.name}: field {spec.name!r} expected type number, got {value!r}")
+            try:
+                return decimal_str(value)
+            except RecordError as e:
+                raise SchemaError(f"{self.name}: field {spec.name!r} is not a valid number: {value!r}") from e
         if spec.type == FieldType.BOOL:
             if not isinstance(value, bool):
                 raise SchemaError(f"{self.name}: field {spec.name!r} expected type bool, got {value!r}")
@@ -297,6 +309,12 @@ def load_schema(path: Path) -> DatasetSchema:
     for k in raw_key:
         if k not in declared_names and k not in _ENVELOPE_KEY_NAMES:
             raise SchemaError(f"{dataset_name}: key names undeclared field {k!r}")
+        if k in fields and fields[k].derived:
+            raise SchemaError(
+                f"{dataset_name}: key names derived field {k!r}; a derived value recomputes "
+                f"whenever its inputs are corrected, so it cannot serve as the stable identity "
+                f"of a fact across revisions"
+            )
     key = tuple(raw_key)
 
     quality = _require_mapping(doc.get("quality", {}), f"{dataset_name}: quality")
