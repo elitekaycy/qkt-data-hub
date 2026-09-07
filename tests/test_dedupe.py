@@ -56,12 +56,24 @@ class DedupeTest(unittest.TestCase):
         fresh.rebuild_from([r2, r1])
         self.assertEqual(fresh.seen(r1.dataset, r1.key), (r2.revision, r2.payload_hash()))
 
-    def test_different_keys_are_independent(self):
+    def test_different_keys_within_one_dataset_do_not_collide(self):
         idx = RevisionIndex()
         out_a = assign(idx, Record.create(**BASE, fields={"actual": None}))
         other = {**BASE, "key": "2026-09|USD|CPI"}
         out_b = assign(idx, Record.create(**other, fields={"actual": None}))
         self.assertEqual(out_a.revision, 1)
+        self.assertEqual(out_b.revision, 1)
+
+    def test_same_key_in_different_datasets_are_independent(self):
+        # Holds `key` fixed and varies only `dataset`. If the index were keyed by `key` alone,
+        # the second dataset's first sighting would be misread as a duplicate of the first
+        # dataset's record (same key, same fields) and `assign` would wrongly return None.
+        idx = RevisionIndex()
+        out_a = assign(idx, Record.create(**BASE, fields={"actual": None}))
+        other = {**BASE, "dataset": "macro.us.ppi"}
+        out_b = assign(idx, Record.create(**other, fields={"actual": None}))
+        self.assertEqual(out_a.revision, 1)
+        self.assertIsNotNone(out_b)
         self.assertEqual(out_b.revision, 1)
 
 

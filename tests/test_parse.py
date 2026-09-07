@@ -31,6 +31,10 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(percent_or_number("3.4M"), "3400000")
         self.assertEqual(percent_or_number("2B"), "2000000000")
 
+    def test_thousands_separator_combined_with_suffix(self):
+        # "1,234K" -> comma stripped first (1234), then the K suffix applies: 1234 * 1e3.
+        self.assertEqual(human_number("1,234K"), "1234000")
+
     def test_human_number_is_case_insensitive_on_suffix(self):
         self.assertEqual(human_number("1.2k"), "1200")
         self.assertEqual(human_number("1.2K"), "1200")
@@ -97,9 +101,17 @@ class ParseTest(unittest.TestCase):
             apply("does_not_exist", "1")
 
     def test_parsers_table_covers_every_public_parser(self):
-        for name in ("human_number", "percent_or_number", "iso8601_with_offset",
-                     "date_in_zone", "enum_ordinal", "boolean"):
+        expected = {
+            "human_number": human_number,
+            "percent_or_number": percent_or_number,
+            "iso8601_with_offset": iso8601_with_offset,
+            "date_in_zone": date_in_zone,
+            "enum_ordinal": enum_ordinal,
+            "boolean": boolean,
+        }
+        for name, function in expected.items():
             self.assertIn(name, PARSERS)
+            self.assertIs(PARSERS[name], function)
 
 
 if __name__ == "__main__":
