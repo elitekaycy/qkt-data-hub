@@ -608,21 +608,36 @@ the fleet uses.
 
 ### 5.1 Snapshot binary `QKH1` (qkt-hub-snapshot-v1)
 
-Little-endian; mirrors the QKT1/QKB1 conventions so existing readers are a template.
+Little-endian; mirrors the QKT1/QKB1 conventions so existing readers are a template. The body is
+**genuinely columnar**: one contiguous block per column, every value of that column for every
+record, in sorted record order. That is what makes a range scan over `known_at` a single
+contiguous read and lets a future non-Python reader memory-map one column without touching the
+rest.
 
 ```
-header  MAGIC "QKH1" (4) | version i32 | schema_hash bytes[32] | dataset_len i32 | dataset utf8
+header  MAGIC "QKH1" (4) | version i32 (=1) | schema_hash bytes[32]
+        | dataset_len i32 | dataset utf8
         | record_count i32 | field_count i32 | scale i32 (=8)
         | field table: per field { name_len i32, name utf8, type u8, unit_len i32, unit utf8 }
-        | scope table: count i32, then { len i32, utf8 }        (dictionary)
-        | key table:   count i32, then { len i32, utf8 }        (dictionary)
-body    columnar, record_count values each, in sorted record order:
+        | dictionaries, each: count i32, then { len i32, utf8 } repeated
+            scope | key | source | source_version | parser | raw_ref
+body    columnar -- record_count values per column, in sorted record order:
         known_at i64 | effective_at i64 | period_start i64* | period_end i64*
         | scope_idx i32 | key_idx i32 | revision i32 | availability u8 | seq i64
-        | per field: i64 (number scaled 10^scale; timestamp ms; enum ordinal; bool 0/1)
+        | source_idx i32 | source_version_idx i32 | parser_idx i32 | raw_ref_idx i32
+        | then one i64 column per field, in field-table order
         * and absent numbers use NULL_SENTINEL = i64.MIN
 trailer sha256 of everything above (32)
 ```
+
+**Provenance is part of the snapshot, not just the journal.** `source`, `source_version`,
+`parser` and `raw_ref` are dictionary-encoded exactly as `scope` and `key` are. They are
+low-cardinality -- a dataset has one or two sources and a handful of parser versions -- so the
+cost is a few bytes per record, and without them a record read from a snapshot would not equal
+the same record read from the journal. That equality is the replay-equivalence property
+(Section 11) and the lineage the determinism contract (Section 6, rule 5) requires; a backtest
+cites a snapshot, so a snapshot that cannot say where its facts came from is not auditable.
+A null `raw_ref` is encoded as dictionary index `-1`.
 
 Strings (`strategy: false` fields) are not stored in snapshots; they live in the journal only.
 Exact size validation (`len == header + body + 32`) is mandatory in every reader.

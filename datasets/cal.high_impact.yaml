@@ -1,0 +1,38 @@
+# High-impact scheduled economic releases, with the consensus that makes a surprise computable.
+#
+# The feed serves only the CURRENT week; last week, next week and this month all return 404
+# (verified 2026-09-06). Consensus not captured while the week is live is lost permanently and
+# cannot be bought back cheaply, which is why the steady cadence is tight and why the near-event
+# cadence exists at all: an `actual` fills in within seconds of a release, and a six-hour poll
+# would record that arrival six hours late, turning an `observed` availability into a lie.
+dataset: cal.high_impact
+version: 1
+title: High-impact scheduled releases and their consensus
+scope_kind: currency
+key: [effective_at, scope, title]
+collector:
+  kind: http_json
+  url: https://nfs.faireconomy.media/ff_calendar_thisweek.json
+  cadence: 30m
+  cadence_near_event: { before: 15m, after: 30m, every: 30s, anchor: effective_at }
+  record_path: "$[*]"
+  where: { impact: [High, Holiday] }
+  scope: { from: country, map: { All: ALL } }
+  effective_at: { from: date, parse: iso8601_with_offset }
+  known_at: ingest_time
+  fields:
+    title:    { from: title }
+    impact:   { from: impact, parse: enum_ordinal, map: { low: 0, medium: 1, high: 2, holiday: 3 } }
+    forecast: { from: forecast, parse: percent_or_number, null_if: ["", "-"] }
+    previous: { from: previous, parse: percent_or_number, null_if: ["", "-"] }
+    actual:   { from: actual,   parse: percent_or_number, null_if: ["", "-"] }
+fields:
+  title:      { type: string, strategy: false }
+  impact:     { type: enum, values: [low, medium, high, holiday] }
+  forecast:   { type: number, null_policy: allow }
+  previous:   { type: number, null_policy: allow }
+  actual:     { type: number, null_policy: allow_until_release }
+  surprise:   { type: number, derived: "actual - forecast", null_policy: allow }
+  surprise_z: { type: number, derived: "zscore(surprise, window=24, min_obs=8)", null_policy: allow }
+quality:
+  range: { impact: [0, 3] }
