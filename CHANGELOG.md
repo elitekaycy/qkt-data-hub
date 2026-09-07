@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-09-07
+
+### Fixed
+
+- **`max_observed_age_ms` (0.1.4) shrank the blast radius of the derived-field corruption but
+  did not fix it.** The actual defect was `derive`'s per-scope history: a plain list appended
+  to in candidate-processing order, correct only when candidates arrive strictly in
+  chronological order. A live collect batch spanning years -- or, after 0.1.4's guard, just the
+  handful of already-backfilled recent days a 14-day window still lets through -- interleaves
+  out of order, and a flat list has no way to recover the fact's own timeline from that. New
+  `ScopeHistory` (`hub/pipeline.py`) replaces it: one slot per key, always produced in ascending
+  `effective_at` order regardless of processing order, updated in place on revision rather than
+  appended as a second slot. It is now used by `ingest`, `_history_for` (the live-collect seed),
+  and the compiler's own re-derivation (`_verify_derived_fields`), which had the identical flaw
+  and is why `verify` never caught the corruption in 0.1.1-0.1.4.
+- **`tools/fred_backfill.py` stamped `effective_at` at a fixed 16:00 UTC**, not the 16:00
+  America/New_York every shipped FRED dataset's live collector actually declares -- a several-
+  hour disagreement about the same calendar day between the two paths that backfill a date and
+  later live-observe it. Combined with the history fix above this is what made a live
+  re-observation of an unchanged value revise cleanly to a duplicate instead of a fabricated
+  `change_1d`; on its own it would have kept computing a genuine, if smaller, class of spurious
+  revisions, so `ScopeHistory.before` also explicitly excludes a key's own prior entry rather
+  than trusting its `effective_at` never to move across a revision.
+- Verified against the exact production scenario: `rates.us.dfii10` and `rates.us.dgs10`
+  (2264 and 16874 source rows), backfilled 2018-2026 then live-collected against the full FRED
+  series twice in a row -- zero revisions, byte-identical on the second pass, `verify` clean.
+
 ## [0.1.4] - 2026-09-07
 
 ### Fixed

@@ -18,8 +18,14 @@ import datetime as dt
 import json
 import sys
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
-NY = dt.timezone(dt.timedelta(hours=-5))  # only used to place the 16:00 observation; DST is irrelevant to a daily point
+# Matches every shipped FRED dataset's live collector exactly (`date_in_zone(..., "America/New_York",
+# hour=16)`): a backfilled and a live-observed record for the same calendar day must compute the
+# identical `effective_at`, or a later live re-observation of an unchanged value looks like a
+# revision instead of a duplicate, and `ScopeHistory` sees two records claiming the same key at two
+# different instants. Fixed at UTC+... would be simpler and was wrong for exactly that reason.
+NY = ZoneInfo("America/New_York")
 RELEASE_UTC_HOUR = 13
 
 
@@ -45,7 +51,7 @@ def main(path: str, since: str = "2000-01-01") -> int:
                 value = str(Decimal(raw)) if raw not in ("", ".") else None
             except InvalidOperation:
                 value = None
-            observed = dt.datetime.combine(day, dt.time(16, 0), tzinfo=dt.UTC)
+            observed = dt.datetime.combine(day, dt.time(16, 0), tzinfo=NY)
             release = dt.datetime.combine(next_business_day(day), dt.time(RELEASE_UTC_HOUR, 0), tzinfo=dt.UTC)
             period_start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
             record = {

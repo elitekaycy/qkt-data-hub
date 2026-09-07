@@ -22,6 +22,7 @@ walk in the single direction it assumes.
 """
 from __future__ import annotations
 
+import bisect
 import datetime as dt
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -104,11 +105,83 @@ def derive_fields(
     return out
 
 
+class ScopeHistory:
+    """One scope's facts, always produced in ascending `effective_at` order regardless of the
+    order candidates are appended in.
+
+    `derive`'s `lag`/`diff`/`zscore`/`pct_rank` read "N payloads back" positionally, from the end
+    of whatever sequence they are handed -- they have no notion of a date, only of "everything
+    before me, in order." That is exactly right for ticks that arrive one at a time, strictly in
+    order, where "the end of history so far" and "immediately before the current fact" are the
+    same thing. It stops being right the moment a batch is not strictly increasing in
+    `effective_at`, and two things break that in practice: a live collector whose only fetch mode
+    returns its provider's entire history hands `ingest` candidates spanning decades in one
+    batch; and a corrected key -- exactly what "revision" means -- had, before this class
+    existed, produced one journal-order slot per revision on every history rebuild
+    (`_history_for`, and the compiler's own re-derivation), counting a single trading day twice.
+    Both scramble a naive "just append" history the same way: a fact from 1962 lands after one
+    from 2018 because it was *processed* after it, not because it happened after it.
+
+    `before(effective_at, key)` is the fix -- it hands `derive` only the facts that genuinely
+    precede this one on the fact's own timeline, however the batch happened to be ordered, and
+    excludes this key's own prior revision rather than mistaking it for "the previous day". A
+    key always has exactly one slot here, updated in place on revision, at the position its own
+    `effective_at` puts it -- which a revision never moves, since a key's identity is built from
+    the same period the schema declares, but a hypothetical schema where it could is handled
+    the same way rather than assumed away.
+    """
+
+    def __init__(self) -> None:
+        self._order: list[tuple[int, str]] = []  # (effective_at, key), ascending
+        self._fields: dict[str, dict[str, Any]] = {}
+
+    def upsert(self, effective_at: int, key: str, fields: dict[str, Any]) -> None:
+        existing = self._position(key)
+        if existing is not None:
+            existing_effective_at, _ = self._order[existing]
+            if existing_effective_at != effective_at:
+                del self._order[existing]
+                bisect.insort(self._order, (effective_at, key))
+        else:
+            bisect.insort(self._order, (effective_at, key))
+        self._fields[key] = fields
+
+    def before(self, effective_at: int, key: str) -> list[dict[str, Any]]:
+        """Every fact that precedes `(effective_at, key)` on the timeline, oldest first.
+
+        `bisect_left` on the same `(effective_at, key)` ordering `upsert` maintains finds the
+        position this fact would occupy, which is correct for everything with a strictly
+        earlier `effective_at`. It is not enough on its own to exclude a prior revision of this
+        same key: a real source (two datasets here disagreed on the wall-clock hour a shared
+        calendar day resolves to, one true one buggy) can compute a genuinely different
+        `effective_at` for what is still the same fact, in which case its stale entry sorts on
+        the wrong side of the cut and `derive` would see this fact as its own immediate
+        predecessor -- an always-zero `diff`. The explicit filter is what makes this correct
+        regardless of whether `effective_at` moved.
+        """
+        cut = bisect.bisect_left(self._order, (effective_at, key))
+        return [self._fields[k] for _, k in self._order[:cut] if k != key]
+
+    def payloads(self) -> list[dict[str, Any]]:
+        """Every currently known fact for this scope, oldest `effective_at` first.
+
+        For inspection only -- `derive` must never see this unfiltered, because it does not
+        distinguish "before me" from "after me"; use `before` for that.
+        """
+        return [self._fields[key] for _, key in self._order]
+
+    def _position(self, key: str) -> int | None:
+        for i, (_, existing_key) in enumerate(self._order):
+            if existing_key == key:
+                return i
+        return None
+
+
 def ingest(
     candidates: Iterable[Candidate],
     schema: DatasetSchema,
     index: RevisionIndex,
-    history: dict[str, list[dict[str, Any]]],
+    history: dict[str, ScopeHistory],
     now_ms: int,
     *,
     source: str,
@@ -147,8 +220,10 @@ def ingest(
                 raise HubError(f"known_at {known_at} runs ahead of the writer clock {wall}")
             key = build_key(schema, candidate)
             envelope = {"known_at": known_at, "effective_at": candidate.effective_at}
-            scope_history = history.setdefault(candidate.scope, [])
-            payload = derive_fields(schema, candidate.fields, envelope, scope_history)
+            scope_history = history.setdefault(candidate.scope, ScopeHistory())
+            payload = derive_fields(
+                schema, candidate.fields, envelope, scope_history.before(candidate.effective_at, key)
+            )
             payload = schema.validate_payload(payload)
             record = Record.create(
                 dataset=schema.name,
@@ -177,6 +252,6 @@ def ingest(
             continue
         if assigned.revision > 1:
             result.revisions += 1
-        history.setdefault(candidate.scope, []).append(dict(assigned.fields))
+        scope_history.upsert(candidate.effective_at, key, dict(assigned.fields))
         result.records.append(assigned)
     return result

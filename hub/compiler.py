@@ -17,7 +17,7 @@ to run on unnoticed, so a mismatch is a hard error, not a warning or a quarantin
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,6 +26,7 @@ from typing import Any, Protocol
 from hub.derive import compile_expr
 from hub.errors import ConfigError, SchemaError, StoreError
 from hub.manifest import DatasetManifest, FieldEntry, Manifest, WindowEntry
+from hub.pipeline import ScopeHistory
 from hub.record import Record, sort_key
 from hub.schema import DatasetSchema, load_schema
 from hub.snapshot import encode
@@ -105,11 +106,17 @@ def _verify_derived_fields(schema: DatasetSchema, records: Sequence[Record]) -> 
     """Recomputes every derived field of `schema` for every record and raises on the first
     mismatch against what the journal actually recorded.
 
-    History is scoped per `scope` and ordered by `known_at`, never mixed across scopes -- a
-    z-score of a US surprise must never see EUR history, because the two series have nothing to
-    do with each other and mixing them would make the statistic meaningless. Records are grouped
-    into their scope with `records`' own relative order preserved from the caller (already
-    `sort_key` order), so `known_at` order within a scope falls out for free.
+    History is scoped per `scope`, never mixed across scopes -- a z-score of a US surprise must
+    never see EUR history, because the two series have nothing to do with each other and mixing
+    them would make the statistic meaningless. Within a scope, records are walked in `sort_key`
+    order (`known_at` first) -- the order a live pipeline actually wrote them in -- but folded
+    into a `ScopeHistory` rather than a flat list: `lag`/`diff`/`zscore` read history
+    positionally, by the fact's own `effective_at`, and a flat per-line list puts a corrected
+    key's superseded revision in a permanent extra slot, double-counting that day and shifting
+    the lookback of everything recomputed after it for the rest of the dataset's life. Folding
+    through `ScopeHistory.upsert` after each check reproduces exactly what `ingest` built up to
+    that point: each record is verified against only what was known before it, and a later
+    revision of an earlier key still lands in that key's one slot, not a new one.
     """
     derived_specs = schema.derived_fields()
     if not derived_specs:
@@ -121,9 +128,10 @@ def _verify_derived_fields(schema: DatasetSchema, records: Sequence[Record]) -> 
         by_scope.setdefault(record.scope, []).append(record)
 
     for scope_records in by_scope.values():
-        history: list[Mapping[str, Any]] = []
+        scope_history = ScopeHistory()
         for record in scope_records:
             payload = _payload_with_envelope(record)
+            history = scope_history.before(record.effective_at, record.key)
             for name, expr in exprs.items():
                 expected = expr(payload, history)
                 actual = record.fields.get(name)
@@ -132,7 +140,7 @@ def _verify_derived_fields(schema: DatasetSchema, records: Sequence[Record]) -> 
                         f"{schema.name}: key {record.key!r} field {name!r} recomputed as "
                         f"{expected!r} but the journal recorded {actual!r}"
                     )
-            history.append(payload)
+            scope_history.upsert(record.effective_at, record.key, dict(record.fields))
 
 
 def compile_dataset(root: Path | str, schema: DatasetSchema, window: str) -> WindowResult:

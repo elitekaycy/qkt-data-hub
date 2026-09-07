@@ -19,7 +19,7 @@ from hub.collectors import Candidate
 from hub.collectors.declarative import DeclarativeSource, duration_seconds
 from hub.collectors.http import HttpSource
 from hub.dedupe import RevisionIndex
-from hub.pipeline import build_key, ingest
+from hub.pipeline import ScopeHistory, build_key, ingest
 from hub.quarantine import Quarantine
 from hub.rawstore import RawBlob, RawStore
 from hub.registry import Registry
@@ -260,32 +260,74 @@ class PipelineTest(unittest.TestCase):
         self.assertNotIn(str(self.now), build_key(self.schema, candidate))
 
 
+class ScopeHistoryTest(unittest.TestCase):
+    """Found the same way as `MaxObservedAgeTest`'s failures: `tools/fred_backfill.py` computed
+    `effective_at` at a fixed 16:00 UTC while `rates.us.dfii10`'s live collector computes 16:00
+    America/New_York -- a real, several-hour disagreement about the same calendar day between
+    two code paths that both exist in this repository. A revision whose `effective_at` moves for
+    that kind of reason must still never see its own prior value as "the previous day"."""
+
+    def test_before_never_includes_the_same_key_even_if_its_effective_at_moved(self) -> None:
+        history = ScopeHistory()
+        history.upsert(100, "A", {"value": "1"})
+        # Simulate exactly what `ingest` does: derive for a revision of A runs against `before`
+        # using A's NEW effective_at, before `upsert` has recorded that new position.
+        self.assertEqual(history.before(150, "A"), [])
+
+    def test_before_still_returns_a_genuinely_different_earlier_key(self) -> None:
+        history = ScopeHistory()
+        history.upsert(100, "A", {"value": "1"})
+        history.upsert(120, "B", {"value": "2"})
+        self.assertEqual(history.before(150, "B"), [{"value": "1"}])
+
+    def test_upsert_replaces_in_place_without_reordering_when_effective_at_is_unchanged(self) -> None:
+        history = ScopeHistory()
+        history.upsert(100, "A", {"value": "1"})
+        history.upsert(200, "B", {"value": "2"})
+        history.upsert(100, "A", {"value": "1-revised"})
+        self.assertEqual(history.payloads(), [{"value": "1-revised"}, {"value": "2"}])
+
+
 class MaxObservedAgeTest(unittest.TestCase):
-    """A source with no incremental fetch mode -- an http_csv endpoint that always returns its
-    provider's whole history, as every FRED collector here does -- hands the pipeline candidates
-    spanning decades on every poll. Journaling all of that as `observed` fabricates `known_at`
-    for every date but the newest, and it does something worse: `derive`'s per-scope history is
-    a list appended to in candidate order, so a batch spanning years, run against a scope that
-    already has backfilled history, interleaves ahead of or behind what is already stored and
-    scrambles every `diff`/`lag`/`zscore` computed from it. This was found by actually deploying
-    the hub: `rates.us.dfii10` is a real dataset with a real `diff(value, 1)` field, backfilled
-    for 2018-2026 and then live-collected once against the full FRED series back to 1962 -- 1058
-    of 2264 already-correct records were silently revised with a fabricated `change_1d`, all of
-    it passing `verify` because the compiler's own re-derivation walks history the same way.
-    `max_observed_age_ms` exists to make that batch never reach `derive` in the first place.
+    """Two independent failures, found by actually deploying the hub, that a full-history
+    source (an http_csv endpoint with no incremental fetch mode, as every FRED collector here
+    is) triggers the moment it is live-collected against a scope that already has backfilled
+    history.
+
+    First: journaling a decades-old row as `observed` fabricates `known_at` for every date but
+    the newest -- `max_observed_age_ms` (this test class) rejects it outright rather than let a
+    source claim it just learned a 1962 value today.
+
+    Second, and the one that actually corrupted a real store: before `ScopeHistory`
+    (`hub/pipeline.py`) existed, `derive`'s per-scope history was a plain list appended to in
+    candidate-processing order. A live batch spanning decades, run against `rates.us.dfii10`
+    (backfilled 2018-2026, then live-collected once against the full series back to 1962),
+    silently revised 1058 of 2264 already-correct records with a fabricated `change_1d` --
+    every one of them mid-series, with real, already-backfilled neighbors on both sides, so the
+    corruption was never "we learned something new," it was the same day counted at the wrong
+    position. It passed `verify` because the compiler's own re-derivation walked history the
+    same way. `ScopeHistory.before` fixes this at the source: history for any candidate is
+    always exactly what precedes it on the fact's own timeline, regardless of what order a batch
+    processes candidates in.
+
+    A genuinely mid-series date must never move; the true first date in a scope's whole history
+    legitimately can, once older facts arrive to precede it -- that is new information changing
+    a correct answer, not the bug. Both are asserted below, and kept distinct on purpose.
     """
 
     DAY_MS = 86_400_000
 
     def setUp(self) -> None:
         self.schema = load_schema(REAL_YIELD)
-        # Four consecutive trading days plus one candidate decades earlier, standing in for the
-        # oldest rows a full-history CSV refetch would include.
-        self.day1 = 1_514_851_200_000  # 2018-01-02T00:00:00Z
+        # Four consecutive trading days -- day0 exists so day1 has a real predecessor and is
+        # genuinely mid-series, not the boundary case -- plus a candidate decades earlier,
+        # standing in for the oldest rows a full-history CSV refetch would include.
+        self.day0 = 1_514_764_800_000  # 2018-01-01T00:00:00Z
+        self.day1 = self.day0 + self.DAY_MS
         self.day2 = self.day1 + self.DAY_MS
         self.day3 = self.day2 + self.DAY_MS
         self.day4 = self.day3 + self.DAY_MS
-        self.ancient = 1_262_563_200_000  # 2010-01-04T00:00:00Z -- 8 years before day 1
+        self.ancient = 1_262_563_200_000  # 2010-01-04T00:00:00Z -- 8 years before day 0
 
     def _candidate(self, period_start: int, value: str, known_at: int) -> Candidate:
         return Candidate(
@@ -299,9 +341,10 @@ class MaxObservedAgeTest(unittest.TestCase):
         )
 
     def _backfill(self) -> tuple[RevisionIndex, dict]:
-        """Seed index/history exactly as `_history_for` would after a real backfill: three
+        """Seed index/history exactly as `_history_for` would after a real backfill: four
         ascending trading days, each with a genuinely staggered `known_at`."""
         candidates = [
+            self._candidate(self.day0, "0.90", self.day0 + self.DAY_MS),
             self._candidate(self.day1, "1.00", self.day1 + self.DAY_MS),
             self._candidate(self.day2, "1.10", self.day2 + self.DAY_MS),
             self._candidate(self.day3, "1.20", self.day3 + self.DAY_MS),
@@ -310,51 +353,56 @@ class MaxObservedAgeTest(unittest.TestCase):
         result = ingest(
             candidates, self.schema, index, history, self.day3 + 2 * self.DAY_MS, source="fred", live=False
         )
-        self.assertEqual(result.written, 3)
+        self.assertEqual(result.written, 4)
         return index, history
 
-    def _day1_change_1d(self, index: RevisionIndex, history: dict) -> str | None:
-        # Re-derive nothing; read straight off what ingest already computed and stored. Day 1
-        # is always the first entry appended for this scope.
-        return history["USD"][0]["change_1d"]
+    def _change_1d(self, history: dict, effective_at: int) -> str | None:
+        # Re-derive nothing; read straight off what ingest already computed and stored.
+        key = build_key(self.schema, self._candidate(effective_at, "0", 0))
+        return history["USD"]._fields[key]["change_1d"]  # noqa: SLF001 - white-box on this class's own state
 
     def test_backfill_alone_leaves_the_first_day_with_no_prior(self) -> None:
         index, history = self._backfill()
-        self.assertIsNone(self._day1_change_1d(index, history))
+        self.assertIsNone(self._change_1d(history, self.day0))
 
-    def test_an_unbounded_wide_batch_corrupts_already_backfilled_history(self) -> None:
-        # Pins the exact failure observed in production: with no bound, the ancient candidate
-        # is appended ahead of nothing (it is new), but by the time the batch revisits day 1,
-        # `scope_history[-1]` is now the ancient row instead of "no prior" -- the earliest
-        # legitimate observation acquires a fabricated change.
-        index, history = self._backfill()
-        wide_batch = [
+    def _wide_batch(self) -> list[Candidate]:
+        # Every date backfill already knows, re-sent in ascending order, plus one candidate
+        # decades earlier and one genuinely new date at the end -- standing in for a full
+        # 1962-2026 CSV refetch against a store already backfilled for 2018-2026.
+        return [
             self._candidate(self.ancient, "5.00", 0),
+            self._candidate(self.day0, "0.90", 0),
             self._candidate(self.day1, "1.00", 0),
             self._candidate(self.day2, "1.10", 0),
             self._candidate(self.day3, "1.20", 0),
             self._candidate(self.day4, "1.30", 0),
         ]
+
+    def test_an_unbounded_wide_batch_leaves_mid_series_history_untouched(self) -> None:
+        # This is the failure that actually corrupted a real store: day 1 has a real, correct
+        # predecessor (day 0) already on file. An out-of-order batch reprocessing it, with an
+        # unrelated ancient candidate elsewhere in the same batch, must never change it.
+        index, history = self._backfill()
+        before = self._change_1d(history, self.day1)
+        self.assertEqual(before, "0.1")
         now = self.day4 + 1_000
-        result = ingest(wide_batch, self.schema, index, history, now, source="fred", live=True)
+        result = ingest(self._wide_batch(), self.schema, index, history, now, source="fred", live=True)
+        day1_key = build_key(self.schema, self._candidate(self.day1, "1.00", 0))
+        self.assertEqual(index.seen(self.schema.name, day1_key)[0], 1, "day 1 must not be revised")
+        self.assertEqual(self._change_1d(history, self.day1), before)
+        # day 0 -- the true first date in the whole history -- legitimately does change: the
+        # ancient candidate is now genuinely its nearest known predecessor. That is new
+        # information correcting an artifact of the backfill's own start date, not corruption.
         self.assertGreater(result.revisions, 0)
-        day1_revision = index.seen(self.schema.name, f"{build_key(self.schema, wide_batch[1])}")
-        self.assertIsNotNone(day1_revision)
-        self.assertGreater(day1_revision[0], 1, "day 1 should not have been revised at all")
+        day0_key = build_key(self.schema, self._candidate(self.day0, "0.90", 0))
+        self.assertGreater(index.seen(self.schema.name, day0_key)[0], 1)
 
     def test_max_observed_age_rejects_the_stale_candidates_and_leaves_history_intact(self) -> None:
         index, history = self._backfill()
-        wide_batch = [
-            self._candidate(self.ancient, "5.00", 0),
-            self._candidate(self.day1, "1.00", 0),
-            self._candidate(self.day2, "1.10", 0),
-            self._candidate(self.day3, "1.20", 0),
-            self._candidate(self.day4, "1.30", 0),
-        ]
         now = self.day4 + 1_000
         root = pathlib.Path(tempfile.mkdtemp())
         result = ingest(
-            wide_batch,
+            self._wide_batch(),
             self.schema,
             index,
             history,
@@ -365,9 +413,9 @@ class MaxObservedAgeTest(unittest.TestCase):
             quarantine=Quarantine(root),
         )
         self.assertEqual(result.written, 1, "only day 4 is recent enough to be live-observed")
-        self.assertEqual(result.quarantined, 4)
-        self.assertEqual(result.revisions, 0, "the three already-backfilled days must stay untouched")
-        day1_key = build_key(self.schema, wide_batch[1])
+        self.assertEqual(result.quarantined, 5)
+        self.assertEqual(result.revisions, 0, "the four already-backfilled days must stay untouched")
+        day1_key = build_key(self.schema, self._candidate(self.day1, "1.00", 0))
         self.assertEqual(index.seen(self.schema.name, day1_key)[0], 1)
         day4_record = result.records[0]
         self.assertEqual(day4_record.fields["change_1d"], "0.1")

@@ -16,7 +16,6 @@ import datetime as dt
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 from hub import __version__
 from hub.collectors import Candidate
@@ -25,7 +24,7 @@ from hub.config import HubConfig
 from hub.dedupe import RevisionIndex
 from hub.journal import JournalWriter
 from hub.logging import log
-from hub.pipeline import ingest
+from hub.pipeline import ScopeHistory, ingest
 from hub.quarantine import Quarantine
 from hub.rawstore import RawStore
 from hub.registry import Registry
@@ -56,21 +55,31 @@ def _parse_instant(text: str) -> int:
     return int(parsed.timestamp() * 1000)
 
 
-def _history_for(root: Path, schema: DatasetSchema) -> tuple[RevisionIndex, dict[str, list[dict[str, Any]]]]:
+def _history_for(root: Path, schema: DatasetSchema) -> tuple[RevisionIndex, dict[str, ScopeHistory]]:
     """Rebuild dedupe and derivation state from the journal so a restart continues cleanly.
 
     Without this a restarted hub would restart revisions at 1 and compute every z-score against
     an empty past, quietly producing different numbers for the same facts after a deploy.
+
+    `read_range` returns every journalled revision of every key, in `sort_key` order -- and a
+    corrected key means more than one line for the same fact. `ScopeHistory.upsert` collapses
+    those back to one slot per key, keeping only the latest revision's fields: a naive per-line
+    append (what this function did before `ScopeHistory` existed) counted a revised day twice
+    and shifted `lag`/`diff`'s lookback for everything after it, for the rest of that scope's
+    life. `sort_key` already orders same-key revisions oldest-known first, so walking in that
+    order and upserting unconditionally leaves the highest revision's fields in place.
     """
     index = RevisionIndex()
-    history: dict[str, list[dict[str, Any]]] = {}
+    history: dict[str, ScopeHistory] = {}
     try:
         records = read_range(root, schema.name, 0, 4_102_444_800_000)
     except HubError:
         return index, history
     index.rebuild_from(records)
     for record in records:
-        history.setdefault(record.scope, []).append(dict(record.fields))
+        history.setdefault(record.scope, ScopeHistory()).upsert(
+            record.effective_at, record.key, dict(record.fields)
+        )
     return index, history
 
 
