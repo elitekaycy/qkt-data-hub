@@ -1,0 +1,27 @@
+# One hub per host. Consumers mount the store READ-ONLY: the hub is the only writer, and a
+# second writer would interleave sequence numbers and corrupt the ordering everything else
+# depends on. The hub holds no broker credentials and has no route to a trading gateway.
+services:
+  qkt-data-hub:
+    image: ghcr.io/elitekaycy/qkt-data-hub:${HUB_IMAGE_TAG:?set HUB_IMAGE_TAG, never latest on real money}
+    container_name: qkt-data-hub
+    restart: unless-stopped
+    volumes:
+      - hub_data:/data
+      # Bring your own datasets to add one without rebuilding the image:
+      # - ./datasets:/app/datasets:ro
+    ports:
+      # Loopback only. Reach it over an SSH tunnel, as the rest of the fleet does.
+      - "${HUB_BIND_HOST:-127.0.0.1}:${HUB_PORT:-8431}:8431"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # What a consumer looks like: the same volume, mounted read-only.
+  # qkt:
+  #   image: ghcr.io/elitekaycy/qkt:${QKT_IMAGE_TAG:?}
+  #   volumes:
+  #     - hub_data:/var/lib/qkt-hub:ro
+
+volumes:
+  hub_data:
