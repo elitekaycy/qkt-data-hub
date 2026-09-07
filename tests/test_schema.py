@@ -124,14 +124,34 @@ class SchemaTest(unittest.TestCase):
         s = self._load(SCHEMA + "\nvalue_alias: actual\n")
         self.assertEqual(s.value_alias, "actual")
 
-    def test_derived_field_cannot_reference_another_derived_field(self):
+    def test_derived_field_may_chain_and_is_ordered_by_dependency(self):
+        # A surprise and its z-score is the format's own worked example, so chaining is the
+        # normal case. What matters is that the dependency is evaluated first, every time.
         chained = SCHEMA.replace(
             'surprise:   { type: number, unit: pct, derived: "actual - forecast" }\n',
             'surprise:   { type: number, unit: pct, derived: "actual - forecast" }\n'
             '  double_surprise: { type: number, derived: "surprise * 2" }\n',
         )
-        with self.assertRaisesRegex(SchemaError, "derived"):
-            self._load(chained)
+        schema = self._load(chained)
+        order = [f.name for f in schema.derived_fields()]
+        self.assertLess(order.index("surprise"), order.index("double_surprise"))
+
+    def test_derived_cycle_is_rejected(self):
+        cyclic = SCHEMA.replace(
+            'surprise:   { type: number, unit: pct, derived: "actual - forecast" }',
+            'a_field: { type: number, derived: "b_field + 1" }\n'
+            '  b_field: { type: number, derived: "a_field + 1" }',
+        )
+        with self.assertRaisesRegex(SchemaError, "cycle"):
+            self._load(cyclic)
+
+    def test_derived_self_reference_is_rejected(self):
+        selfref = SCHEMA.replace(
+            'surprise:   { type: number, unit: pct, derived: "actual - forecast" }',
+            'surprise:   { type: number, unit: pct, derived: "surprise + 1" }',
+        )
+        with self.assertRaisesRegex(SchemaError, "itself"):
+            self._load(selfref)
 
     def test_derived_field_can_reference_envelope_timestamps(self):
         s = self._load(SCHEMA.replace(

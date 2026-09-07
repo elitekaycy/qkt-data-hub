@@ -37,8 +37,23 @@ _ENVELOPE_KEY_NAMES = frozenset({"scope", "period_start", "period_end", "effecti
 _SCOPE_KINDS = frozenset({"currency", "instrument", "issuer", "all"})
 _NULL_POLICIES = frozenset({"forbid", "allow", "allow_until_release"})
 
+# `collector` and `retention` are carried but not interpreted here: the schema owns what a
+# record MEANS, while the collector block owns where its bytes come from and is validated by
+# `hub.collectors.declarative`, which is the only code that can say whether a mapping is
+# well formed. Listing them keeps the strict-unknown-key rule intact for everything else.
 _TOP_LEVEL_KEYS = frozenset(
-    {"dataset", "version", "title", "scope_kind", "key", "fields", "quality", "value_alias"}
+    {
+        "dataset",
+        "version",
+        "title",
+        "scope_kind",
+        "key",
+        "fields",
+        "quality",
+        "value_alias",
+        "collector",
+        "retention",
+    }
 )
 _FIELD_KEYS = frozenset({"type", "unit", "values", "null_policy", "derived", "strategy"})
 _QUALITY_KEYS = frozenset({"range"})
@@ -80,6 +95,7 @@ class DatasetSchema:
     title: str
     value_alias: str
     quality: dict[str, Any]
+    derived_order: tuple[str, ...]
     raw: dict[str, Any] = field(repr=False)
 
     def hash(self) -> str:
@@ -94,8 +110,13 @@ class DatasetSchema:
         return tuple(f for f in self.fields.values() if f.strategy)
 
     def derived_fields(self) -> tuple[FieldSpec, ...]:
-        """Declared fields computed by an expression rather than supplied by a collector."""
-        return tuple(f for f in self.fields.values() if f.derived)
+        """Declared fields computed by an expression, in dependency order.
+
+        The order matters and is fixed at load: a z-score over a surprise must be evaluated
+        after the surprise itself, and the live pipeline and the compiler's recompute must walk
+        the same sequence or they would disagree about the same record.
+        """
+        return tuple(self.fields[name] for name in self.derived_order)
 
     def validate_payload(self, fields: dict[str, Any]) -> dict[str, Any]:
         """Checks `fields` against the declared types, null policy, and quality ranges, and
@@ -227,14 +248,22 @@ def _load_field_spec(name: str, raw_spec: Any, dataset_name: str) -> FieldSpec:
     )
 
 
-def _validate_derived_references(fields: dict[str, FieldSpec], dataset_name: str) -> None:
-    """Every `derived:` expression may only reach declared non-derived fields plus the two
-    envelope timestamps the pipeline merges in at evaluation time -- never another derived
-    field, because chaining would make evaluation order (and therefore the result) depend on
-    something this schema does not declare.
+def _derived_order(fields: dict[str, FieldSpec], dataset_name: str) -> tuple[str, ...]:
+    """Validate every `derived:` expression and return the order to evaluate them in.
+
+    A derived field may reference declared fields -- including another derived field -- plus the
+    two envelope timestamps the pipeline merges in at evaluation time. Chaining is the normal
+    case, not an edge case: a surprise is `actual - forecast` and its z-score is computed over
+    that surprise, which is the shape the format's own worked example uses.
+
+    What is genuinely unsafe is a CYCLE, because then no evaluation order exists and the result
+    would depend on iteration order rather than on the declaration. Cycles are rejected here,
+    and the topological order is returned so every consumer -- the live pipeline and the
+    compiler's recompute-and-verify -- evaluates in the same sequence and cannot disagree.
     """
-    non_derived_names = {f.name for f in fields.values() if not f.derived}
-    available = non_derived_names | _ENVELOPE_EXPRESSION_NAMES
+    declared = set(fields)
+    available = declared | _ENVELOPE_EXPRESSION_NAMES
+    dependencies: dict[str, set[str]] = {}
     for spec in fields.values():
         if not spec.derived:
             continue
@@ -242,17 +271,34 @@ def _validate_derived_references(fields: dict[str, FieldSpec], dataset_name: str
             names = referenced_names(spec.derived)
         except SchemaError as e:
             raise SchemaError(f"{dataset_name}: field {spec.name!r} derived expression: {e}") from e
-        unknown = names - available
-        if unknown:
-            if unknown & {f.name for f in fields.values() if f.derived}:
-                raise SchemaError(
-                    f"{dataset_name}: field {spec.name!r} derived expression references another "
-                    f"derived field {sorted(unknown)!r}; chaining derived fields is not allowed"
-                )
+        if unknown := names - available:
             raise SchemaError(
                 f"{dataset_name}: field {spec.name!r} derived expression references undeclared "
                 f"name(s) {sorted(unknown)!r}"
             )
+        if spec.name in names:
+            raise SchemaError(f"{dataset_name}: field {spec.name!r} derived expression references itself")
+        dependencies[spec.name] = {n for n in names if n in fields and fields[n].derived}
+
+    order: list[str] = []
+    state: dict[str, int] = {}
+
+    def visit(name: str, trail: tuple[str, ...]) -> None:
+        mark = state.get(name, 0)
+        if mark == 2:
+            return
+        if mark == 1:
+            cycle = " -> ".join([*trail[trail.index(name) :], name])
+            raise SchemaError(f"{dataset_name}: derived fields form a cycle: {cycle}")
+        state[name] = 1
+        for dependency in sorted(dependencies[name]):
+            visit(dependency, (*trail, name))
+        state[name] = 2
+        order.append(name)
+
+    for name in sorted(dependencies):
+        visit(name, ())
+    return tuple(order)
 
 
 def load_schema(path: Path) -> DatasetSchema:
@@ -298,7 +344,7 @@ def load_schema(path: Path) -> DatasetSchema:
             )
         fields[name] = _load_field_spec(name, raw_spec, dataset_name)
 
-    _validate_derived_references(fields, dataset_name)
+    derived_order = _derived_order(fields, dataset_name)
 
     raw_key = doc["key"]
     if not isinstance(raw_key, list) or len(raw_key) == 0:
@@ -343,5 +389,6 @@ def load_schema(path: Path) -> DatasetSchema:
         title=title,
         value_alias=value_alias,
         quality=quality,
+        derived_order=derived_order,
         raw=doc,
     )
