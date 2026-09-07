@@ -138,6 +138,22 @@ For a source no mapping can express — a PDF, a page needing a session, a model
 collector is a small Python class with the same two methods, and everything downstream is
 unchanged. See [docs/EXTENDING.md](docs/EXTENDING.md).
 
+## Loading history
+
+Live collection records `known_at` as it happens. History cannot be observed after the fact, so
+it enters through `backfill`, stamped `derived` with an availability rule you can read and a
+strict consumer can refuse:
+
+```bash
+python3 tools/fred_backfill.py tests/fixtures/fred_dfii10.csv 2018-01-01 > /tmp/dfii10.ndjson
+python -m hub --root ./hub-data backfill rates.us.dfii10 --file /tmp/dfii10.ndjson --source fred
+python -m hub --root ./hub-data compile && python -m hub --root ./hub-data verify
+python -m hub --root ./hub-data as-of rates.us.dfii10 USD 2024-06-03T12:00:00+00:00
+```
+
+That last command answers with Thursday's value on a Monday morning: Friday's observation is not
+knowable until the next business day at 13:00 UTC, and the store says so rather than guessing.
+
 ## Consuming it
 
 ```python
@@ -149,7 +165,8 @@ facts = reader.as_of("cal.high_impact", "USD", 1789129800000)
 windows = reader.windows("cal.high_impact", "USD", now, ahead_ms=1_800_000, pad_ms=300_000)
 ```
 
-`hubread` is stdlib-only and never imports `hub`. Vendor it, or mount the store read-only and
+A single-field dataset names its field `value`, so a consumer reads `alias.value` with no schema
+lookup. `hubread` is stdlib-only and never imports `hub`. Vendor it, or mount the store read-only and
 point at it. The [qkt](https://github.com/elitekaycy/qkt) engine binds datasets as `HUB:` streams
 so a strategy reads `cpi.surprise_z` the way it reads a candle field, identically in backtest and
 live.

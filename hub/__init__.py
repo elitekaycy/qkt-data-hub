@@ -9,4 +9,4 @@ Live and history are the same bytes: the journal a collector appends to is the i
 snapshot compiler folds, so a backtest and a live session read one format, not two pipelines.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-07
+
+### Added
+
+- **`rates.us.dfii10`**: the 10-year TIPS real yield (FRED `DFII10`), one observation per US
+  business day, with a live CSV collector and a derived one-day change. The strongest documented
+  slow driver of gold.
+- **`tools/fred_backfill.py`**: turns a FRED daily CSV into `backfill` records stamped `derived`
+  with an explicit availability rule (next US business day, 13:00 UTC), the same window the
+  engine's macro path assumes. Used to load 2018-2026 in one pass; a strict consumer may refuse
+  the result.
+
+### Changed
+
+- `value` is no longer a reserved field name. A single-field dataset names its one field `value`
+  so a consumer reads `alias.value` with no schema lookup at compile time. `value_alias` remains
+  for datasets that want a differently named field to answer to `.value` as well.
+
 ## [0.1.0] - 2026-09-07
 
 First working store: acquire, journal, compile, read, all under one record format.
