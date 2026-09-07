@@ -113,12 +113,21 @@ def date_in_zone(raw: object, zone: str, hour: int = 0) -> int:
     transition the date falls on. Resolving that here, via `zoneinfo`, is what keeps a July
     release and a January release at the same nominal hour landing on the correct UTC hour
     instead of a fixed offset baked in at collector-writing time.
+
+    Several government open-data platforms (Socrata among them) serialise a plain date as a
+    floating timestamp -- "2026-09-01T00:00:00.000" for the first of September, with no zone
+    and always midnight. That trailing artifact carries no information the schema wants; the
+    hour and zone here are what set the real wall-clock instant, so the calendar day is taken
+    from either form.
     """
     text = _require_str(raw).strip()
     try:
         day = date.fromisoformat(text)
-    except ValueError as e:
-        raise ParseError(f"not an iso8601 date: {raw!r}") from e
+    except ValueError:
+        try:
+            day = datetime.fromisoformat(text).date()
+        except ValueError as e:
+            raise ParseError(f"not an iso8601 date: {raw!r}") from e
     try:
         tz = ZoneInfo(zone)
     except ZoneInfoNotFoundError as e:

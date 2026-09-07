@@ -1,0 +1,24 @@
+# 2-year Treasury constant-maturity yield (FRED series DGS2), one observation per US business
+# day. The short end of the curve traders read against Fed policy expectations; see the design
+# spec, class B. Same collector shape and availability rule as rates.us.dfii10.
+dataset: rates.us.dgs2
+version: 1
+title: 2y Treasury yield (DGS2)
+scope_kind: currency
+key: [period_start, scope]
+collector:
+  kind: http_csv
+  url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2
+  cadence: 6h
+  record_path: "$[*]"
+  scope: { const: USD }
+  effective_at: { from: observation_date, parse: date_in_zone, zone: America/New_York, hour: 16 }
+  period_start: { from: observation_date, parse: date_in_zone, zone: UTC, hour: 0 }
+  known_at: ingest_time
+  fields:
+    value: { from: DGS2, parse: percent_or_number, null_if: [".", ""] }
+fields:
+  value: { type: number, unit: pct, null_policy: allow }
+  change_1d: { type: number, unit: pct, derived: "diff(value, 1)", null_policy: allow }
+quality:
+  range: { value: [-2, 25] }

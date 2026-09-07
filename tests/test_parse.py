@@ -69,6 +69,17 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(ParseError):
             date_in_zone("2026-07-01", "Nowhere/Imaginary", hour=8)
 
+    def test_date_in_zone_accepts_a_floating_timestamp_date(self):
+        # Socrata-style sources (CFTC among them) serialise a plain date as midnight with no
+        # offset; the trailing time-of-day carries no information and is discarded.
+        plain = date_in_zone("2026-09-01", "UTC", hour=13)
+        floating = date_in_zone("2026-09-01T00:00:00.000", "UTC", hour=13)
+        self.assertEqual(plain, floating)
+
+    def test_date_in_zone_rejects_garbage(self):
+        with self.assertRaises(ParseError):
+            date_in_zone("not-a-date", "UTC", hour=8)
+
     def test_enum_ordinal_is_case_insensitive_and_none_on_miss(self):
         mapping = {"low": 0, "high": 2}
         self.assertEqual(enum_ordinal("HIGH", mapping), 2)

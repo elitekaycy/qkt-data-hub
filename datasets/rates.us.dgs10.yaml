@@ -1,0 +1,24 @@
+# 10-year Treasury constant-maturity nominal yield (FRED series DGS10), one observation per US
+# business day. Paired with rates.us.dfii10, the spread is breakeven inflation. Same collector
+# shape and availability rule as rates.us.dfii10.
+dataset: rates.us.dgs10
+version: 1
+title: 10y Treasury yield (DGS10)
+scope_kind: currency
+key: [period_start, scope]
+collector:
+  kind: http_csv
+  url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10
+  cadence: 6h
+  record_path: "$[*]"
+  scope: { const: USD }
+  effective_at: { from: observation_date, parse: date_in_zone, zone: America/New_York, hour: 16 }
+  period_start: { from: observation_date, parse: date_in_zone, zone: UTC, hour: 0 }
+  known_at: ingest_time
+  fields:
+    value: { from: DGS10, parse: percent_or_number, null_if: [".", ""] }
+fields:
+  value: { type: number, unit: pct, null_policy: allow }
+  change_1d: { type: number, unit: pct, derived: "diff(value, 1)", null_policy: allow }
+quality:
+  range: { value: [-2, 25] }

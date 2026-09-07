@@ -1,0 +1,23 @@
+# FOMC federal funds target range, upper bound (FRED series DFEDTARU). Changes only on an FOMC
+# decision day and is flat between meetings, which makes it a clean regime marker rather than a
+# noisy series. Paired with rates.us.dfedtarl for the full target band.
+dataset: rates.us.dfedtaru
+version: 1
+title: Fed funds target range, upper bound (DFEDTARU)
+scope_kind: currency
+key: [period_start, scope]
+collector:
+  kind: http_csv
+  url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFEDTARU
+  cadence: 6h
+  record_path: "$[*]"
+  scope: { const: USD }
+  effective_at: { from: observation_date, parse: date_in_zone, zone: America/New_York, hour: 16 }
+  period_start: { from: observation_date, parse: date_in_zone, zone: UTC, hour: 0 }
+  known_at: ingest_time
+  fields:
+    value: { from: DFEDTARU, parse: percent_or_number, null_if: [".", ""] }
+fields:
+  value: { type: number, unit: pct, null_policy: allow }
+quality:
+  range: { value: [0, 25] }

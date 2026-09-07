@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-09-07
+
+### Added
+
+- **Four Treasury and policy-rate datasets** (`rates.us.dgs2`, `rates.us.dgs10`,
+  `rates.us.fedfunds`, `rates.us.dfedtaru`, `rates.us.dfedtarl`): the short and long ends of the
+  curve, the effective funds rate, and the FOMC target band, each with a live CSV collector and
+  the same next-business-day-13:00-UTC backfill lag as `rates.us.dfii10`.
+- **`pos.cftc.cot_gold`**: CFTC Commitments of Traders positioning for COMEX gold (class C),
+  reported Tuesdays and published the following Friday at 15:30 ET; a live JSON collector and
+  `tools/cftc_backfill.py` load history stamped `derived` with that exact lag. Includes a
+  `net_noncomm` derived field.
+- `date_in_zone` now accepts a source's floating-timestamp date serialization (Socrata's
+  `"2026-09-01T00:00:00.000"`) in addition to a bare `YYYY-MM-DD`, needed by the CFTC feed and
+  reusable by any future dataset from a similar platform.
+
 ## [0.1.1] - 2026-09-07
 
 ### Added

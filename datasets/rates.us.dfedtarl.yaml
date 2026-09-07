@@ -1,0 +1,22 @@
+# FOMC federal funds target range, lower bound (FRED series DFEDTARL). See rates.us.dfedtaru;
+# the two series together are the full target band the Fed sets at each meeting.
+dataset: rates.us.dfedtarl
+version: 1
+title: Fed funds target range, lower bound (DFEDTARL)
+scope_kind: currency
+key: [period_start, scope]
+collector:
+  kind: http_csv
+  url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFEDTARL
+  cadence: 6h
+  record_path: "$[*]"
+  scope: { const: USD }
+  effective_at: { from: observation_date, parse: date_in_zone, zone: America/New_York, hour: 16 }
+  period_start: { from: observation_date, parse: date_in_zone, zone: UTC, hour: 0 }
+  known_at: ingest_time
+  fields:
+    value: { from: DFEDTARL, parse: percent_or_number, null_if: [".", ""] }
+fields:
+  value: { type: number, unit: pct, null_policy: allow }
+quality:
+  range: { value: [0, 25] }

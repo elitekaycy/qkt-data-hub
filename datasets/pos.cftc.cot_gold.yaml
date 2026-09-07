@@ -1,0 +1,34 @@
+# CFTC Commitments of Traders, disaggregated futures-only report, COMEX gold. Reported as of
+# each Tuesday and published the following Friday at 15:30 ET -- the lag that makes this a
+# point-in-time series rather than a snapshot: a strategy reacting to Tuesday's positioning on
+# Wednesday would be reacting to a number the market could not yet see. See the design spec,
+# class C.
+dataset: pos.cftc.cot_gold
+version: 1
+title: CFTC Commitments of Traders, gold futures (COMEX)
+scope_kind: instrument
+key: [period_start, scope]
+collector:
+  kind: http_json
+  url: https://publicreporting.cftc.gov/resource/6dca-aqww.json?market_and_exchange_names=GOLD%20-%20COMMODITY%20EXCHANGE%20INC.&$limit=60&$order=report_date_as_yyyy_mm_dd%20DESC
+  cadence: 12h
+  record_path: "$[*]"
+  scope: { const: XAUUSD }
+  effective_at: { from: report_date_as_yyyy_mm_dd, parse: date_in_zone, zone: UTC, hour: 0 }
+  period_start: { from: report_date_as_yyyy_mm_dd, parse: date_in_zone, zone: UTC, hour: 0 }
+  known_at: ingest_time
+  fields:
+    open_interest:  { from: open_interest_all, parse: percent_or_number, null_if: [""] }
+    noncomm_long:   { from: noncomm_positions_long_all, parse: percent_or_number, null_if: [""] }
+    noncomm_short:  { from: noncomm_positions_short_all, parse: percent_or_number, null_if: [""] }
+    comm_long:      { from: comm_positions_long_all, parse: percent_or_number, null_if: [""] }
+    comm_short:     { from: comm_positions_short_all, parse: percent_or_number, null_if: [""] }
+fields:
+  open_interest:  { type: number, null_policy: allow }
+  noncomm_long:   { type: number, null_policy: allow }
+  noncomm_short:  { type: number, null_policy: allow }
+  comm_long:      { type: number, null_policy: allow }
+  comm_short:     { type: number, null_policy: allow }
+  net_noncomm:    { type: number, derived: "noncomm_long - noncomm_short", null_policy: allow }
+quality:
+  range: { open_interest: [0, 5000000], noncomm_long: [0, 5000000], noncomm_short: [0, 5000000] }
