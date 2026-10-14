@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/elitekaycy/qkt-data-hub/actions/workflows/ci.yml"><img src="https://github.com/elitekaycy/qkt-data-hub/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="license"></a>
+  <a href="https://github.com/sponsors/elitekaycy"><img src="https://img.shields.io/badge/sponsor-%E2%9D%A4-ea4aaa?logo=github-sponsors&logoColor=white" alt="Sponsor"></a>
   <a href="https://github.com/elitekaycy/qkt-data-hub/pkgs/container/qkt-data-hub"><img src="https://img.shields.io/badge/ghcr.io-qkt--data--hub-2496ED?logo=docker&logoColor=white" alt="container"></a>
   <img src="https://img.shields.io/badge/python-3.12%20stdlib%20only-3776AB?logo=python&logoColor=white" alt="python">
 </p>
