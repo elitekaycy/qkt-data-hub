@@ -24,6 +24,7 @@ from hub.derive import RESERVED_EXPRESSION_NAMES, referenced_names
 from hub.simpleyaml import load_path
 from hubread.errors import RecordError, SchemaError
 from hubread.record import FIELD_NAME_RE, RESERVED_FIELD_NAMES, canonical_json, decimal_str
+from hubread.snapshot import NULL_SENTINEL, SCALE
 
 #: Envelope timestamp names a derived expression may read in addition to declared fields --
 #: the pipeline merges these into the payload it hands a compiled expression at evaluation time.
@@ -154,9 +155,25 @@ class DatasetSchema:
             if isinstance(value, bool) or not isinstance(value, (int, str)):
                 raise SchemaError(f"{self.name}: field {spec.name!r} expected type number, got {value!r}")
             try:
-                return decimal_str(value)
+                text = decimal_str(value)
             except RecordError as e:
                 raise SchemaError(f"{self.name}: field {spec.name!r} is not a valid number: {value!r}") from e
+            # The snapshot stores a number as a signed 64-bit integer at scale 8. A value that
+            # cannot round-trip through that column must be refused here, at ingest, where it is
+            # quarantined with its reason, rather than surfacing later as a compile crash that
+            # blocks every window of the dataset.
+            scaled = Decimal(text).scaleb(SCALE)
+            if scaled != scaled.to_integral_value():
+                raise SchemaError(
+                    f"{self.name}: field {spec.name!r} value {text} needs more than {SCALE} decimal places"
+                )
+            if not (NULL_SENTINEL < int(scaled) < 2**63):
+                limit = Decimal(2**63 - 1).scaleb(-SCALE)
+                raise SchemaError(
+                    f"{self.name}: field {spec.name!r} value {text} is outside the storable range "
+                    f"+/-{limit}; declare it in a larger unit (millions, billions)"
+                )
+            return text
         if spec.type == FieldType.BOOL:
             if not isinstance(value, bool):
                 raise SchemaError(f"{self.name}: field {spec.name!r} expected type bool, got {value!r}")

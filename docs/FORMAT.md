@@ -12,7 +12,7 @@ Frozen and versioned as a whole (`v: 1`). Adding a field is a version bump.
 |---|---|---|
 | `v` | int | envelope version |
 | `dataset` | string | dotted lowercase name; the first segment must be a registered domain |
-| `scope` | string | currency, `VENUE:SYMBOL`, `ISSUER:<ticker>`, or `ALL` |
+| `scope` | string | currency, `VENUE:SYMBOL`, `ISSUER:<ticker>`, or `ALL`; upper case `A-Z 0-9 _ : -` only, at least one letter, no dot (`ISSUER:BRK-B`) |
 | `key` | string | identity of the thing, stable across every revision of it |
 | `revision` | int | 1-based, increments per key on each changed payload |
 | `known_at` | int | epoch ms UTC. **The only field the visibility rule reads** |
