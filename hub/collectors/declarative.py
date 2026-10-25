@@ -49,7 +49,7 @@ _COLLECTOR_KEYS = frozenset(
 _NEAR_EVENT_KEYS = frozenset({"before", "after", "every", "anchor"})
 _SCOPE_KEYS = frozenset({"from", "map", "const", "upper"})
 _TIME_KEYS = frozenset({"from", "parse", "zone", "hour", "const"})
-_FIELD_KEYS = frozenset({"from", "parse", "map", "null_if", "const", "zone", "hour"})
+_FIELD_KEYS = frozenset({"from", "parse", "map", "null_if", "null_if_prefix", "const", "zone", "hour"})
 _KINDS = frozenset({"http_json", "http_csv"})
 
 
@@ -176,6 +176,9 @@ class DeclarativeSource:
         self._fields: dict[str, dict[str, Any]] = {}
         for name, spec in _require_map(block.get("fields") or {}, f"{dataset}.collector.fields").items():
             self._fields[name] = _reject_unknown(f"{dataset}.collector.fields.{name}", spec, _FIELD_KEYS)
+            prefixes = self._fields[name].get("null_if_prefix", [])
+            if not isinstance(prefixes, list) or not all(isinstance(p, str) and p for p in prefixes):
+                raise ConfigError(f"{dataset}.collector.fields.{name}.null_if_prefix must list non-empty strings")
         self._availability = Availability(str(block.get("availability", "observed")))
         self._csv_value_column = block.get("csv_value_column")
         max_age = block.get("max_observed_age")
@@ -263,6 +266,9 @@ class DeclarativeSource:
         for sentinel in spec.get("null_if") or []:
             if raw == sentinel or (isinstance(raw, str) and raw.strip() == str(sentinel).strip()):
                 return None
+        # A value printed as a bound ("<1.25%") states a range, not a number; null keeps the row.
+        if isinstance(raw, str) and raw.strip().startswith(tuple(spec.get("null_if_prefix") or ())):
+            return None
         parser_name = spec.get("parse")
         if parser_name is None:
             return None if raw is None else str(raw)

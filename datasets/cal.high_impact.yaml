@@ -23,8 +23,8 @@ collector:
   fields:
     title:    { from: title }
     impact:   { from: impact, parse: enum_ordinal, map: { low: 0, medium: 1, high: 2, holiday: 3 } }
-    forecast: { from: forecast, parse: percent_or_number, null_if: ["", "-"] }
-    previous: { from: previous, parse: percent_or_number, null_if: ["", "-"] }
+    forecast: { from: forecast, parse: percent_or_number, null_if: ["", "-"], null_if_prefix: ["<", ">"] }
+    previous: { from: previous, parse: percent_or_number, null_if: ["", "-"], null_if_prefix: ["<", ">"] }
     actual:   { from: actual,   parse: percent_or_number, null_if: ["", "-"] }
 fields:
   title:      { type: string, strategy: false }

@@ -170,10 +170,9 @@ class DeclarativeCalendarTest(unittest.TestCase):
         self.assertEqual(match.scope, row["country"].upper())
 
     def test_one_unreadable_row_is_quarantined_and_the_rest_go_through(self) -> None:
-        # Seen live on 2026-10-25: ForexFactory wrote a BOJ forecast as the range "<1.25%". That
-        # row cannot be a number, but it must not cost the week's other releases.
+        # A row that cannot be a number must not cost the week's other releases.
         rows = json.loads(self.blob.body)
-        bad = dict(next(r for r in rows if r.get("impact") == "High"), forecast="<1.25%")
+        bad = dict(next(r for r in rows if r.get("impact") == "High"), forecast="1.2.5%")
         blob = RawBlob(body=json.dumps([bad] + rows).encode(), content_type="application/json", fetched_at=1)
         candidates = self.source.parse(blob)
         self.assertEqual(len(candidates), len(self.candidates) + 1)
@@ -185,7 +184,24 @@ class DeclarativeCalendarTest(unittest.TestCase):
         self.assertEqual(result.quarantined, 1)
         self.assertEqual(result.written + result.duplicates, len(self.candidates))
         logged = next((root / "quarantine" / "cal.high_impact").glob("*.ndjson")).read_text()
-        self.assertIn("<1.25%", logged)
+        self.assertIn("1.2.5%", logged)
+
+    def test_a_forecast_printed_as_a_bound_is_null_and_the_event_is_kept(self) -> None:
+        # Seen live on 2026-10-25: ForexFactory wrote a BOJ forecast as the range "<1.25%". The
+        # release is still a scheduled high-impact event; only the bound is not a number.
+        rows = json.loads(self.blob.body)
+        bound = dict(next(r for r in rows if r.get("impact") == "High"), forecast="<1.25%", previous="> 0.5%")
+        blob = RawBlob(body=json.dumps([bound]).encode(), content_type="application/json", fetched_at=1)
+        (candidate,) = self.source.parse(blob)
+        self.assertNotIn("parse_error", candidate.extra)
+        self.assertIsNone(candidate.fields["forecast"])
+        self.assertIsNone(candidate.fields["previous"])
+
+    def test_null_if_prefix_must_be_a_list_of_strings(self) -> None:
+        collector = dict(self.schema.raw["collector"])
+        collector["fields"] = dict(collector["fields"], actual={"from": "actual", "null_if_prefix": "<"})
+        with self.assertRaises(ConfigError):
+            DeclarativeSource("cal.high_impact", collector)
 
     def test_rows_before_the_format_floor_are_skipped_not_quarantined(self) -> None:
         # FRED returns history from the 1950s; the format cannot hold anything before 2000, so
