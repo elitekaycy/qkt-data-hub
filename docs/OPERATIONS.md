@@ -116,8 +116,10 @@ python3 tools/qkt_conformance.py --store ./hub-data --dataset cal.us_high \
 
 ## Rules a collector must keep for live and backtest to agree
 
-- Write a record at its own `known_at`. The writer refuses a `known_at` ahead of its clock, and
-  qkt treats every record already in the journal when a live session starts as history.
+- Write a record at its own `known_at`. The writer refuses a `known_at` ahead of its clock. qkt
+  (from the release after 0.63.1) also holds any record it reads before its `known_at` and delivers
+  it at that instant, and seeds each hub stream with its newest visible record when a session
+  starts, so a restart is never blind to the current fact.
 - Scopes are upper case `A-Z 0-9 _ : -` with no dot (`ISSUER:BRK-B`); qkt reads the scope as the
   last dot-separated segment of the stream name.
 - Numbers must fit 8 decimals in a signed 64-bit integer (about +/-92 billion); store large totals
