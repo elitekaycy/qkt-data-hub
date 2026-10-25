@@ -31,6 +31,7 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 DATASETS = pathlib.Path(__file__).resolve().parents[1] / "datasets"
 CALENDAR = DATASETS / "cal.high_impact.yaml"
 REAL_YIELD = DATASETS / "rates.us.dfii10.yaml"
+FUNDING = DATASETS / "rates.crypto.btc_funding.yaml"
 
 
 def _serve(body: bytes, content_type: str, status: int = 200) -> tuple[str, Any]:
@@ -505,3 +506,28 @@ class RegistryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubDailyKeyTest(unittest.TestCase):
+    """Three 8h funding prints on one day are three facts, not three revisions of one."""
+
+    def test_each_funding_print_is_its_own_fact_and_a_stale_resend_is_a_duplicate(self) -> None:
+        schema = load_schema(FUNDING)
+        source = DeclarativeSource(schema.name, schema.raw["collector"])
+        day = int(dt.datetime(2026, 10, 24, tzinfo=dt.UTC).timestamp() * 1000)
+        prints = [
+            {"symbol": "BTCUSDT", "fundingTime": day + h * 3_600_000, "fundingRate": "0.0001", "markPrice": "80000"}
+            for h in (0, 8, 16)
+        ]
+        blob = RawBlob(json.dumps(prints).encode(), "application/json", day)
+        index, history = RevisionIndex(), {}
+        backfilled = ingest(
+            source.parse(blob), schema, index, history, day + 17 * 3_600_000, source="binance", live=False
+        )
+        self.assertEqual([r.revision for r in backfilled.records], [1, 1, 1])
+        self.assertEqual(len({r.key for r in backfilled.records}), 3)
+        resent = ingest(
+            source.parse(blob), schema, index, history, day + 3 * 86_400_000,
+            source="binance", live=True, max_observed_age_ms=12 * 3_600_000,
+        )
+        self.assertEqual((resent.duplicates, resent.quarantined, resent.written), (3, 0, 0))

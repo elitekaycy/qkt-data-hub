@@ -4,10 +4,12 @@
 # role CFTC CoT plays for gold. Keyless, no auth, `limit=30` covers ~10 days at 8h cadence per
 # poll -- backfill beyond that needs `startTime`/`endTime` paging (not implemented here).
 dataset: rates.crypto.btc_funding
-version: 1
+version: 2
 title: BTCUSDT perpetual funding rate (Binance)
 scope_kind: instrument
-key: [period_start, scope]
+# Keyed by the funding instant: `period_start` keys at day granularity, which made each day's three
+# 8h prints three revisions of one fact (version 1).
+key: [effective_at, scope]
 collector:
   kind: http_json
   url: https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=30
