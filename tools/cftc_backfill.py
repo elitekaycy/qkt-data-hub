@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import sys
+import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -46,6 +47,7 @@ def _number(raw: object) -> str | None:
 
 def main(path: str, since: str, scope: str) -> int:
     floor = dt.date.fromisoformat(since)
+    now_ms = int(time.time() * 1000)
     with open(path, encoding="utf-8") as fh:
         rows = json.load(fh)
     for row in rows:
@@ -53,6 +55,8 @@ def main(path: str, since: str, scope: str) -> int:
         if day < floor:
             continue
         known_at_ms = release_instant_ms(day)
+        if known_at_ms > now_ms:
+            continue  # not released yet; the live collector records it when it is
         period_start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
         record = {
             "scope": scope,

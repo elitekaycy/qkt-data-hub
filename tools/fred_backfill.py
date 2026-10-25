@@ -25,6 +25,7 @@ import csv
 import datetime as dt
 import json
 import sys
+import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -54,6 +55,7 @@ def published_at(day: dt.date, cadence: str) -> dt.datetime:
 
 def main(path: str, since: str = "2000-01-01", cadence: str = "daily") -> int:
     floor = dt.date.fromisoformat(since)
+    now_ms = int(time.time() * 1000)
     with open(path, encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh)
         date_col = next(c for c in reader.fieldnames or [] if c.lower() in ("observation_date", "date"))
@@ -69,6 +71,8 @@ def main(path: str, since: str = "2000-01-01", cadence: str = "daily") -> int:
                 value = None
             observed = dt.datetime.combine(day, dt.time(16, 0), tzinfo=NY)
             release = published_at(day, cadence)
+            if release.timestamp() * 1000 > now_ms:
+                continue  # not published yet; the live collector records it when it is
             period_start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
             record = {
                 "scope": "USD",
