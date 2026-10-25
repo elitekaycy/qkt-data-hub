@@ -7,6 +7,8 @@ from hub.parse import (
     boolean,
     date_in_zone,
     enum_ordinal,
+    epoch_millis,
+    epoch_seconds,
     human_number,
     iso8601_with_offset,
     percent_or_number,
@@ -68,6 +70,33 @@ class ParseTest(unittest.TestCase):
     def test_date_in_zone_unknown_zone_raises_parse_error(self):
         with self.assertRaises(ParseError):
             date_in_zone("2026-07-01", "Nowhere/Imaginary", hour=8)
+
+    def test_epoch_seconds_accepts_int_and_numeric_string(self):
+        self.assertEqual(epoch_seconds(1789516800), 1789516800000)
+        self.assertEqual(epoch_seconds("1789516800"), 1789516800000)
+
+    def test_epoch_seconds_sentinels_to_none(self):
+        for token in ("", " ", "-", "n/a", None):
+            self.assertIsNone(epoch_seconds(token))
+
+    def test_epoch_seconds_rejects_garbage(self):
+        with self.assertRaises(ParseError):
+            epoch_seconds("not-a-timestamp")
+
+    def test_epoch_seconds_refuses_a_float_rather_than_rounding_it(self):
+        with self.assertRaises(ParseError):
+            epoch_seconds(1789516800.5)
+
+    def test_epoch_seconds_keeps_millisecond_fractions_exactly(self):
+        self.assertEqual(epoch_seconds("1789516800.123"), 1789516800123)
+
+    def test_epoch_millis_accepts_int_and_numeric_string(self):
+        self.assertEqual(epoch_millis(1789516800001), 1789516800001)
+        self.assertEqual(epoch_millis("1789516800001"), 1789516800001)
+
+    def test_epoch_millis_sentinels_to_none(self):
+        for token in ("", " ", "-", "n/a", None):
+            self.assertIsNone(epoch_millis(token))
 
     def test_date_in_zone_accepts_a_floating_timestamp_date(self):
         # Socrata-style sources (CFTC among them) serialise a plain date as midnight with no

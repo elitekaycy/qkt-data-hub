@@ -1,0 +1,28 @@
+# Crypto Fear & Greed Index (alternative.me), a daily composite of volatility, momentum,
+# volume, social sentiment, dominance, and Google Trends into a single 0-100 score. Keyless,
+# free, one value per calendar day. Scoped to BTCUSD by convention -- the index is a
+# market-wide crypto sentiment read, not BTC-specific, but this hub has no "crypto market"
+# scope kind yet and BTC is the dominant driver of the index's inputs.
+dataset: text.crypto.fear_greed
+version: 1
+title: Crypto Fear & Greed Index
+scope_kind: instrument
+key: [period_start, scope]
+collector:
+  kind: http_json
+  url: https://api.alternative.me/fng/?limit=30
+  cadence: 6h
+  max_observed_age: 3d
+  record_path: "$.data[*]"
+  scope: { const: BTCUSD }
+  effective_at: { from: timestamp, parse: epoch_seconds }
+  period_start: { from: timestamp, parse: epoch_seconds }
+  known_at: ingest_time
+  fields:
+    value: { from: value, parse: percent_or_number }
+    classification: { from: value_classification }
+fields:
+  value: { type: number, unit: score_0_100, null_policy: allow }
+  classification: { type: string, null_policy: allow }
+quality:
+  range: { value: [0, 100] }

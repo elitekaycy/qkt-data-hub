@@ -6,12 +6,32 @@ watching, rather than at 03:00 on the first row that happens to exercise the bro
 """
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from typing import Any
 
 from hub.collectors.declarative import DeclarativeSource
 from hub.schema import DatasetSchema, load_schema
 from hubread.errors import ConfigError
+
+
+def _load_code_source(dataset: str, collector: dict[str, Any]) -> Any:
+    """Instantiate a hand-written `Source` named by `collector.module`/`collector.class`.
+
+    This is the registration point `docs/EXTENDING.md` describes for a feed no declarative
+    mapping can express (a rolling-window URL, a POST body, a PDF). The class is imported by
+    dotted path rather than pre-wired here, so adding one is still a dataset-directory change,
+    not an edit to this file.
+    """
+    module_name = collector.get("module")
+    class_name = collector.get("class")
+    if not module_name or not class_name:
+        raise ConfigError(f"{dataset}.collector: kind 'code' requires 'module' and 'class'")
+    module = importlib.import_module(str(module_name))
+    cls = getattr(module, str(class_name), None)
+    if cls is None:
+        raise ConfigError(f"{dataset}.collector: {module_name}.{class_name} not found")
+    return cls()
 
 
 class Registry:
@@ -34,8 +54,12 @@ class Registry:
                 raise ConfigError(f"duplicate dataset {schema.name} in {directory}")
             schemas[schema.name] = schema
             collector = schema.raw.get("collector")
-            if isinstance(collector, dict) and str(collector.get("kind", "")).startswith("http_"):
-                sources[schema.name] = DeclarativeSource(schema.name, collector, opener=opener)
+            if isinstance(collector, dict):
+                kind = str(collector.get("kind", ""))
+                if kind.startswith("http_"):
+                    sources[schema.name] = DeclarativeSource(schema.name, collector, opener=opener)
+                elif kind == "code":
+                    sources[schema.name] = _load_code_source(schema.name, collector)
         return cls(schemas, sources)
 
     def datasets(self) -> list[str]:

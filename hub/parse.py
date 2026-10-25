@@ -105,6 +105,42 @@ def iso8601_with_offset(raw: object) -> int:
     return delta.days * 86_400_000 + delta.seconds * 1000 + delta.microseconds // 1000
 
 
+def _decimal_count(raw: object) -> Decimal:
+    """An exact decimal from an int or numeric string; floats are refused, never rounded through."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        raise ParseError(f"not a unix timestamp: {raw!r}")
+    try:
+        return Decimal(raw.strip() if isinstance(raw, str) else raw)
+    except InvalidOperation as e:
+        raise ParseError(f"not a unix timestamp: {raw!r}") from e
+
+
+def epoch_seconds(raw: object) -> int | None:
+    """Decode a Unix timestamp in seconds (int or numeric string) to epoch milliseconds.
+
+    Several free JSON APIs (crypto sentiment indices, exchange REST endpoints) stamp records
+    with `time.time()`-style integers rather than ISO-8601. Unlike `iso8601_with_offset`, there
+    is no zone ambiguity to refuse: a Unix timestamp is UTC by definition. The conversion is exact
+    decimal arithmetic: a float would round a fractional-second stamp differently on some inputs.
+    """
+    if _is_sentinel(raw):
+        return None
+    millis = _decimal_count(raw) * 1000
+    if millis != millis.to_integral_value():
+        raise ParseError(f"unix timestamp {raw!r} has sub-millisecond precision")
+    return int(millis)
+
+
+def epoch_millis(raw: object) -> int | None:
+    """Decode a Unix timestamp already in milliseconds (int or numeric string)."""
+    if _is_sentinel(raw):
+        return None
+    millis = _decimal_count(raw)
+    if millis != millis.to_integral_value():
+        raise ParseError(f"millisecond timestamp {raw!r} is not a whole number")
+    return int(millis)
+
+
 def date_in_zone(raw: object, zone: str, hour: int = 0) -> int:
     """Anchor a bare calendar date to a wall-clock hour in a named zone, in epoch milliseconds.
 
@@ -176,6 +212,8 @@ PARSERS: dict[str, Callable[..., object]] = {
     "human_number": human_number,
     "percent_or_number": percent_or_number,
     "iso8601_with_offset": iso8601_with_offset,
+    "epoch_seconds": epoch_seconds,
+    "epoch_millis": epoch_millis,
     "date_in_zone": date_in_zone,
     "enum_ordinal": enum_ordinal,
     "boolean": boolean,
