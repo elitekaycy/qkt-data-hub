@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qkt-data-hub</title>
+<style>
+/* Layout: header with health chips, a full-width node graph of the pipeline, then a dataset list
+   beside the selected dataset's charts, records and as-of explorer. */
+:root{
+  --bg:#f4f6f8; --panel:#fff; --fg:#17202c; --muted:#5d6878; --line:#d6dce4; --node:#fbfcfd;
+  --ok:#1f8a55; --warn:#b07800; --bad:#c0352b; --idle:#8a94a3; --accent:#2f6fd6; --bar:#7aa3e6;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0e1319; --panel:#151c25; --fg:#e3e8ef; --muted:#97a2b2; --line:#283241; --node:#1a2330;
+  --ok:#4fd08e; --warn:#e7b94a; --bad:#ff7a6e; --idle:#6f7a8a; --accent:#79a7ff; --bar:#4b74c4; color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans)}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:17px;margin:0;font-weight:650}
+.root{font:12px var(--mono);color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;white-space:nowrap}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--idle);flex:none}
+.ok .dot,.dot.ok{background:var(--ok)} .warn .dot,.dot.warn{background:var(--warn)} .bad .dot,.dot.bad{background:var(--bad)}
+main{padding:16px 20px 40px;display:flex;flex-direction:column;gap:16px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px}
+section>h2{font-size:13px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line);font-weight:600;display:flex;gap:10px;align-items:center}
+section>h2 small{font-weight:400;color:var(--muted)}
+.graph{overflow-x:auto;padding:8px}
+.graph svg{display:block;min-width:1100px;width:100%;height:auto;max-height:260px}
+.cols{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:16px}
+.cols>*{min-width:0}
+@media (max-width:900px){.cols{grid-template-columns:1fr}}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600}
+td.n{font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12px;white-space:nowrap}
+.list tr{cursor:pointer} .list tr:hover td{background:var(--node)} .list tr.sel td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.detail{display:flex;flex-direction:column;gap:16px;padding:14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+select,input,button{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--node);color:var(--fg)}
+button{cursor:pointer}
+.chart{width:100%;height:auto;display:block}
+.scroll{overflow-x:auto}
+.mono{font-family:var(--mono);font-size:12px}
+.muted{color:var(--muted)}
+.empty{padding:16px;color:var(--muted)}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:13px}
+.kv b{font-weight:500;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>qkt-data-hub</h1>
+  <span class="root" id="root">loading…</span>
+  <div class="chips" id="chips"></div>
+  <label class="chip"><input type="checkbox" id="auto" checked style="margin:0"> refresh 10s</label>
+</header>
+<main>
+  <section>
+    <h2>Pipeline <small id="graph-scope">all datasets</small></h2>
+    <div class="graph"><svg id="graph" viewBox="0 0 1180 196" role="img" aria-label="Hub pipeline from sources to readers with live counts"></svg></div>
+  </section>
+  <div class="cols">
+    <section>
+      <h2>Datasets <small id="ds-count"></small></h2>
+      <div class="scroll"><table class="list"><thead><tr><th></th><th>Dataset</th><th>Records</th><th>Newest</th></tr></thead><tbody id="ds"></tbody></table></div>
+    </section>
+    <section>
+      <h2 id="d-title">Select a dataset</h2>
+      <div class="detail" id="detail"><div class="empty">Pick a dataset on the left to see its records per day, its values over time, the latest records and what a strategy would see at any instant.</div></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+let S = null, sel = null;
+const fmtAge = (ms) => { if (ms == null) return "never"; const s = Math.max(0, ms / 1000);
+  if (s < 90) return Math.round(s) + "s"; if (s < 5400) return Math.round(s / 60) + "m"; if (s < 172800) return Math.round(s / 3600) + "h"; return Math.round(s / 86400) + "d"; };
+const iso = (ms) => ms == null ? "—" : new Date(ms).toISOString().replace("T", " ").slice(0, 16) + "Z";
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const num = (n) => n == null ? "—" : Number(n).toLocaleString();
+
+function dsHealth(d, now) {
+  const c = d.collect;
+  if (d.collector.kind === "backfill only") return d.journal.records ? "idle" : "warn";
+  if (!c) return "warn";
+  if (!c.ok || (c.consecutive_failures || 0) > 0) return (c.consecutive_failures || 0) >= 3 ? "bad" : "warn";
+  if (d.quarantine.last7 > 0) return "warn";
+  return "ok";
+}
+
+function chips() {
+  const h = S.heartbeat, v = S.verify, c = S.compile;
+  const hb = h.at == null ? ["bad", "no heartbeat"] : [h.stale ? "bad" : "ok", "heartbeat " + fmtAge(h.age_ms) + " ago"];
+  const vf = !v.at ? ["warn", "not verified yet"] : [v.ok ? "ok" : "bad", (v.ok ? "verified " : (v.problems || []).length + " problem(s), checked ") + fmtAge(S.now - v.at) + " ago"];
+  const cp = !c.at ? ["warn", "never compiled"] : ["ok", "compiled " + num(c.windows) + " windows " + fmtAge(S.now - c.at) + " ago"];
+  const raw = ["idle", num(S.raw.blobs) + " raw blobs, " + (S.raw.bytes / 1e6).toFixed(1) + " MB"];
+  $("#chips").innerHTML = [hb, cp, vf, raw].map(([k, t]) => `<span class="chip ${k}"><span class="dot"></span>${esc(t)}</span>`).join("");
+}
+
+function table() {
+  const now = S.now;
+  $("#ds-count").textContent = S.datasets.length + " total";
+  $("#ds").innerHTML = S.datasets.map((d) => {
+    const k = dsHealth(d, now);
+    return `<tr data-n="${esc(d.name)}" class="${d.name === sel ? "sel" : ""}"><td><span class="dot ${k}"></span></td>
+      <td><div class="mono">${esc(d.name)}</div><div class="muted" style="font-size:12px">${esc(d.collector.kind)}</div></td>
+      <td class="n">${num(d.journal.records)}</td><td class="n">${d.journal.last_known_at ? fmtAge(now - d.journal.last_known_at) + " ago" : "—"}</td></tr>`;
+  }).join("");
+  document.querySelectorAll("#ds tr").forEach((tr) => tr.onclick = () => select(tr.dataset.n));
+}
+
+/* The node graph: one row of n8n-style nodes joined by wires. Counts are store-wide, or the
+   selected dataset's when one is picked. Wire colour follows the health of the node it feeds. */
+function graph() {
+  const d = sel ? S.datasets.find((x) => x.name === sel) : null;
+  const all = S.datasets;
+  const sum = (f) => all.reduce((a, x) => a + (f(x) || 0), 0);
+  const collecting = all.filter((x) => x.collector.kind !== "backfill only");
+  const runs = d ? [d] : collecting;
+  const failing = runs.filter((x) => x.collect && !x.collect.ok).length;
+  const lastRun = Math.max(0, ...runs.map((x) => (x.collect && x.collect.at) || 0));
+  const last = (f) => runs.reduce((a, x) => a + ((x.collect && x.collect.ok && f(x.collect)) || 0), 0);
+  const q7 = d ? d.quarantine.last7 : sum((x) => x.quarantine.last7);
+  const recs = d ? d.journal.records : sum((x) => x.journal.records);
+  const wins = d ? d.manifest.windows : sum((x) => x.manifest.windows);
+  const lastFact = d ? d.journal.last_known_at : Math.max(0, ...all.map((x) => x.journal.last_known_at || 0));
+  const verifyOk = S.verify.at ? (S.verify.ok ? "ok" : "bad") : "warn";
+  const src = d ? (d.collector.url || d.collector.schedule || d.collector.kind) : collecting.length + " collecting, " + (all.length - collecting.length) + " backfill-only";
+  const nodes = [
+    {t: "Sources", s: "ok", l: [d ? d.collector.kind + " collector" : all.length + " datasets", ...String(src).replace(/^https?:\/\//, "").match(/.{1,19}/g).slice(0, 2)]},
+    {t: "Collect", s: failing ? "bad" : (lastRun ? "ok" : "warn"), l: [lastRun ? "last " + fmtAge(S.now - lastRun) + " ago" : "no runs yet", failing ? failing + " failing" : "all sources ok"]},
+    {t: "Raw archive", s: "ok", l: [num(S.raw.blobs) + " blobs", "sha256, kept forever"]},
+    {t: "Pipeline", s: q7 ? "warn" : "ok", l: ["parse, validate,", "dedupe, derive", "last +" + last((c) => c.written) + " new, " + last((c) => c.duplicates) + " dup", q7 + " quarantined (7d)"]},
+    {t: "Journal", s: recs ? "ok" : "warn", l: [num(recs) + " records", lastFact ? "newest " + fmtAge(S.now - lastFact) + " ago" : "empty"]},
+    {t: "Compile", s: S.compile.at ? "ok" : "warn", l: [num(wins) + " windows", S.compile.at ? fmtAge(S.now - S.compile.at) + " ago" : "never"]},
+    {t: "Verify", s: verifyOk, l: [verifyOk === "ok" ? "hashes match" : verifyOk === "bad" ? (S.verify.problems || []).length + " problem(s)" : "not run", S.verify.at ? fmtAge(S.now - S.verify.at) + " ago" : ""]},
+    {t: "Readers", s: S.heartbeat.stale ? "warn" : "ok", l: ["qkt backtest", "qkt live", "hubread, guardrails"]},
+  ];
+  const W = 128, H = 100, gap = 18, y = 64, x0 = 14;
+  const col = (k) => `var(--${k === "idle" ? "idle" : k})`;
+  let g = `<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>`;
+  nodes.forEach((n, i) => {
+    const x = x0 + i * (W + gap);
+    if (i) { const px = x - gap; g += `<path d="M${px - 2} ${y + H / 2} C ${px + 6} ${y + H / 2}, ${x - 8} ${y + H / 2}, ${x - 1} ${y + H / 2}" stroke="${col(n.s)}" stroke-width="2" fill="none" marker-end="url(#ar)" style="color:${col(n.s)}"/>`; }
+    g += `<rect x="${x}" y="${y}" width="${W}" height="${H}" rx="10" fill="var(--node)" stroke="var(--line)"/>`;
+    g += `<rect x="${x}" y="${y}" width="5" height="${H}" rx="2" fill="${col(n.s)}"/>`;
+    g += `<circle cx="${x + W - 14}" cy="${y + 16}" r="5" fill="${col(n.s)}"/>`;
+    g += `<text x="${x + 14}" y="${y + 21}" font-size="13" font-weight="600" fill="var(--fg)">${esc(n.t)}</text>`;
+    n.l.forEach((line, j) => { g += `<text x="${x + 14}" y="${y + 40 + j * 16}" font-size="11" fill="var(--muted)">${esc(line)}</text>`; });
+  });
+  g += `<text x="${x0}" y="22" font-size="12" fill="var(--muted)">Every reader opens the same journal and manifest. A fact is visible to a strategy from its known_at, in backtest and live alike.</text>`;
+  g += `<text x="${x0}" y="42" font-size="12" fill="var(--muted)">Green: healthy. Amber: needs a look (no runs yet, quarantine, not verified). Red: failing or stale.</text>`;
+  $("#graph").innerHTML = g;
+  $("#graph-scope").textContent = d ? d.name : "all datasets";
+}
+
+function barChart(perDay) {
+  const days = [], now = S.now;
+  for (let i = 59; i >= 0; i--) days.push(new Date(now - i * 864e5).toISOString().slice(0, 10));
+  const vals = days.map((k) => perDay[k] || 0), max = Math.max(1, ...vals);
+  const W = 640, H = 120, L = 34, B = 20, bw = (W - L - 8) / days.length;
+  let s = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Records written per day, last 60 days">`;
+  [...new Set([0, Math.round(max / 2), max])].forEach((v) => { const yy = 8 + (H - B - 8) * (1 - v / max); s += `<line x1="${L}" x2="${W - 4}" y1="${yy}" y2="${yy}" stroke="var(--line)"/><text x="${L - 6}" y="${yy + 4}" font-size="10" text-anchor="end" fill="var(--muted)">${v}</text>`; });
+  vals.forEach((v, i) => { const h = (H - B - 8) * v / max; s += `<rect x="${L + i * bw + 1}" y="${H - B - h}" width="${Math.max(1, bw - 2)}" height="${h}" fill="var(--bar)"><title>${days[i]}: ${v}</title></rect>`; });
+  [0, 29, 59].forEach((i) => s += `<text x="${L + i * bw + bw / 2}" y="${H - 5}" font-size="10" text-anchor="middle" fill="var(--muted)">${days[i].slice(5)}</text>`);
+  return s + `</svg>`;
+}
+
+function lineChart(points, field) {
+  if (!points.length) return `<div class="empty">No values for this field and scope.</div>`;
+  const xs = points.map((p) => p[0]), ys = points.map((p) => Number(p[2]));
+  const x0 = Math.min(...xs), x1 = Math.max(...xs) + 1, y0 = Math.min(...ys), y1 = Math.max(...ys) + (Math.max(...ys) === Math.min(...ys) ? 1 : 0);
+  const W = 640, H = 170, L = 70, B = 22, T = 10;
+  const px = (x) => L + (W - L - 10) * (x - x0) / (x1 - x0), py = (v) => T + (H - B - T) * (1 - (v - y0) / (y1 - y0));
+  const isTime = /(^at$|_at$|time)/.test(field) && y0 > 9e11;
+  const lab = (v) => isTime ? new Date(v).toISOString().slice(0, 10) : (Math.abs(v) >= 1e4 ? v.toExponential(2) : +v.toFixed(4));
+  let s = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(field)} as each value became known">`;
+  [0, 0.5, 1].forEach((f) => { const v = y0 + (y1 - y0) * f, yy = py(v); s += `<line x1="${L}" x2="${W - 6}" y1="${yy}" y2="${yy}" stroke="var(--line)"/><text x="${L - 6}" y="${yy + 4}" font-size="10" text-anchor="end" fill="var(--muted)">${lab(v)}</text>`; });
+  let d = "";
+  points.forEach((p, i) => { const X = px(p[0]), Y = py(Number(p[2])); d += i ? ` H${X.toFixed(1)} V${Y.toFixed(1)}` : `M${X.toFixed(1)} ${Y.toFixed(1)}`; });
+  d += ` H${px(x1).toFixed(1)}`;
+  s += `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>`;
+  const lp = points[points.length - 1]; s += `<circle cx="${px(lp[0])}" cy="${py(Number(lp[2]))}" r="3.5" fill="var(--accent)"/>`;
+  [x0, (x0 + x1) / 2, x1].forEach((x, i) => s += `<text x="${px(x)}" y="${H - 6}" font-size="10" text-anchor="${["start", "middle", "end"][i]}" fill="var(--muted)">${new Date(x).toISOString().slice(0, 10)}</text>`);
+  return s + `</svg><div class="muted" style="font-size:12px">Step line: the value a strategy saw, changing at each record's known_at. ${points.length} records.</div>`;
+}
+
+async function getJSON(u) { const r = await fetch(u); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; }
+
+async function select(name) {
+  sel = name; table(); graph();
+  history.replaceState(null, "", "#" + encodeURIComponent(name));
+  const d = S.datasets.find((x) => x.name === name);
+  $("#d-title").innerHTML = `${esc(d.name)} <small>${esc(d.title)}</small>`;
+  const numeric = d.fields.filter((f) => ["number", "timestamp", "enum", "bool"].includes(f.type) && f.strategy);
+  const scopes = d.journal.scopes.length ? d.journal.scopes : ["USD"];
+  const c = d.collect || {};
+  $("#detail").innerHTML = `
+    <div class="kv">
+      <b>Collector</b><span class="mono">${esc(d.collector.kind)} ${esc(d.collector.url || d.collector.schedule || "")}</span>
+      <b>Last collect</b><span>${c.at ? iso(c.at) + " · " + (c.ok ? `ok, ${c.candidates} candidates, +${c.written} new, ${c.duplicates} duplicates, ${c.quarantined} quarantined` : "failed: " + esc(c.error || "")) : "no runs recorded"}</span>
+      <b>Journal</b><span>${num(d.journal.records)} records, seq ${num(d.journal.last_seq)}, ${Object.entries(d.journal.availability).map(([k, v]) => v + " " + k).join(", ") || "empty"}</span>
+      <b>Snapshot</b><span>${num(d.manifest.windows)} compiled windows, manifest seq ${num(d.manifest.last_seq)}${d.manifest.last_seq !== d.journal.last_seq ? " <span class='chip warn'><span class='dot'></span>behind the journal, compile pending</span>" : ""}</span>
+      <b>Fields</b><span class="mono">${d.fields.map((f) => esc(f.name) + ":" + esc(f.type) + (f.derived ? "*" : "")).join("  ")}</span>
+    </div>
+    <div><div class="muted" style="font-size:12px;margin-bottom:4px">Records written per day (by known_at), last 60 days</div>${barChart(d.journal.per_day)}</div>
+    <div>
+      <div class="row"><span class="muted" style="font-size:12px">Values over time</span>
+        <select id="f">${numeric.map((f) => `<option>${esc(f.name)}</option>`).join("")}</select>
+        <select id="s">${scopes.map((s) => `<option>${esc(s)}</option>`).join("")}</select></div>
+      <div id="line" style="margin-top:6px"></div>
+    </div>
+    <div>
+      <div class="row"><span class="muted" style="font-size:12px">What a strategy sees at</span>
+        <input id="t" value="${new Date(S.now).toISOString().slice(0, 19)}Z" size="22"> <button id="go">Show</button></div>
+      <div id="asof" class="scroll" style="margin-top:6px"></div>
+    </div>
+    <div><div class="muted" style="font-size:12px;margin-bottom:4px">Latest records</div><div id="recs" class="scroll"></div></div>
+    <div><div class="muted" style="font-size:12px;margin-bottom:4px">Quarantine: ${d.quarantine.total} total, ${d.quarantine.last7} in 7 days</div>
+      ${d.quarantine.latest.length ? `<table><tbody>${d.quarantine.latest.map((q) => `<tr><td class="n">${iso(q.at)}</td><td>${esc(q.reason)}</td></tr>`).join("")}</tbody></table>` : `<div class="muted">Nothing refused.</div>`}</div>`;
+  const drawLine = async () => {
+    if (!numeric.length) { $("#line").innerHTML = `<div class="empty">No numeric fields.</div>`; return; }
+    try { $("#line").innerHTML = lineChart(await getJSON(`/api/series?dataset=${encodeURIComponent(name)}&scope=${encodeURIComponent($("#s").value)}&field=${encodeURIComponent($("#f").value)}`), $("#f").value); }
+    catch (e) { $("#line").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  const recTable = (rows) => rows.length ? `<table><thead><tr><th>known_at</th><th>effective_at</th><th>scope</th><th>rev</th><th>avail.</th><th>fields</th></tr></thead><tbody>${rows.map((r) =>
+    `<tr><td class="n">${iso(r.known_at)}</td><td class="n">${iso(r.effective_at)}</td><td class="mono">${esc(r.scope)}</td><td class="n">${r.revision}</td><td>${esc(r.availability)}</td><td class="mono">${esc(Object.entries(r.fields).map(([k, v]) => k + "=" + (k.endsWith("at") && typeof v === "number" ? iso(v) : v)).join("  "))}</td></tr>`).join("")}</tbody></table>` : `<div class="muted">No records.</div>`;
+  const drawAsOf = async () => {
+    try {
+      const facts = (await getJSON(`/api/as-of?dataset=${encodeURIComponent(name)}&scope=${encodeURIComponent($("#s").value)}&at=${encodeURIComponent($("#t").value)}`))
+        .sort((a, b) => b.known_at - a.known_at || b.seq - a.seq);
+      $("#asof").innerHTML = facts.length
+        ? `<div style="font-size:12px;margin-bottom:4px">${facts.length} records visible. A HUB stream reads the newest one, first below.</div>` + recTable(facts.slice(0, 8))
+        : `<div class="muted">Nothing visible yet at that instant.</div>`;
+    }
+    catch (e) { $("#asof").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  $("#f") && ($("#f").onchange = drawLine); $("#s").onchange = () => { drawLine(); drawAsOf(); }; $("#go").onclick = drawAsOf;
+  drawLine(); drawAsOf();
+  $("#recs").innerHTML = recTable(await getJSON(`/api/records?dataset=${encodeURIComponent(name)}&limit=15`));
+}
+
+async function refresh() {
+  try { S = await getJSON("/api/state"); }
+  catch (e) { $("#root").textContent = "cannot read the store: " + e.message; return; }
+  $("#root").textContent = S.root;
+  chips(); table(); graph();
+  if (!sel && location.hash.length > 1) { const n = decodeURIComponent(location.hash.slice(1)); if (S.datasets.some((x) => x.name === n)) select(n); }
+}
+refresh();
+setInterval(() => { if ($("#auto").checked) refresh(); }, 10000);
+</script>
+</body>
+</html>

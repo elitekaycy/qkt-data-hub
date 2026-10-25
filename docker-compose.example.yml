@@ -17,6 +17,18 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "5" }
 
+  # The read-only web view: pipeline graph, dataset health, charts and an as-of explorer.
+  # It never writes, so it mounts the store read-only like any other reader.
+  qkt-data-hub-ui:
+    image: ghcr.io/elitekaycy/qkt-data-hub:${HUB_IMAGE_TAG:?}
+    container_name: qkt-data-hub-ui
+    restart: unless-stopped
+    command: ["ui", "--host", "0.0.0.0", "--port", "8090"]
+    volumes:
+      - hub_data:/data:ro
+    ports:
+      - "${HUB_BIND_HOST:-127.0.0.1}:${HUB_UI_PORT:-8090}:8090"
+
   # What a consumer looks like: the same volume, mounted read-only.
   # qkt:
   #   image: ghcr.io/elitekaycy/qkt:${QKT_IMAGE_TAG:?}

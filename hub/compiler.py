@@ -30,6 +30,7 @@ from hub.pipeline import ScopeHistory
 from hub.record import Record, sort_key
 from hub.schema import DatasetSchema, load_schema
 from hub.snapshot import encode
+from hub.status import record_step
 from hubread.journal import read_range
 from hubread.record import MAX_TIMESTAMP_MS, MIN_TIMESTAMP_MS
 from hubread.snapshot import sha256_of
@@ -207,6 +208,10 @@ def _field_entries(schema: DatasetSchema) -> tuple[FieldEntry, ...]:
     )
 
 
+def _now_ms() -> int:
+    return int(datetime.now(UTC).timestamp() * 1000)
+
+
 def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
     """Compiles every window that has journal data for every dataset `registry` knows, and
     writes the result as `manifest.json`.
@@ -252,6 +257,12 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
         )
 
     manifest.save(root)
+    record_step(
+        Path(root),
+        "compile",
+        {"at": _now_ms(), "datasets": len(manifest.datasets),
+         "windows": sum(len(e.windows) for e in manifest.datasets.values())},
+    )
     return manifest
 
 
@@ -320,4 +331,5 @@ def verify(root: Path | str, registry: object | None = None) -> list[str]:
                     f"{label}: recompiled hash ({recompiled.sha256}) differs from manifest hash ({entry.sha256})"
                 )
 
+    record_step(Path(root), "verify", {"at": _now_ms(), "ok": not problems, "problems": problems[:50]})
     return problems
