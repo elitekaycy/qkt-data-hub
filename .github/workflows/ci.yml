@@ -119,6 +119,16 @@ jobs:
           after=$(wc -l < smoke/data/journal/cal.high_impact/*.ndjson)
           [ "$before" = "$after" ] || { echo "::error::re-collect grew the journal ($before -> $after)"; exit 1; }
 
+          # The image's default command is the whole hub in one container: the collector and the
+          # read-only web view, served from the same process.
+          docker run -d --name hub-smoke -p 127.0.0.1:8090:8090 \
+            -v "$PWD/smoke/data:/data" -v "$PWD/smoke/datasets:/app/datasets:ro" qkt-data-hub:ci
+          for _ in $(seq 1 60); do curl -sf -o smoke/state.json http://127.0.0.1:8090/api/state && break; sleep 0.5; done
+          python3 -c "import json; d=json.load(open('smoke/state.json')); assert [x['name'] for x in d['datasets']] == ['cal.high_impact'], d" \
+            || { docker logs hub-smoke; echo "::error::the one-container hub did not serve its view"; exit 1; }
+          curl -sf http://127.0.0.1:8090/ | grep -q qkt-data-hub || { echo "::error::no UI page"; exit 1; }
+          docker rm -f hub-smoke >/dev/null
+
           # A tampered snapshot must make verify fail. A verify that cannot fail proves nothing.
           # Tamper from inside a container as root: the store is written by the image's
           # non-root user, so the runner's own account cannot modify it.

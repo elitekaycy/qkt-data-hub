@@ -33,7 +33,12 @@ MIN_TIMESTAMP_MS = 946_684_800_000
 MAX_TIMESTAMP_MS = 4_102_444_800_000
 
 DATASET_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+){1,4}$")
-SCOPE_RE = re.compile(r"^[A-Za-z0-9_.:+-]{1,64}$")
+# A scope is how a consumer addresses one slice of a dataset, and qkt reads it out of a stream
+# symbol (`HUB:<dataset>.<SCOPE>/<field>`) by splitting on dots and taking the last segment when
+# it is upper case. A dot inside a scope, or a lower-case scope, would be read as part of the
+# dataset name and silently match nothing, so the format refuses both: write `ISSUER:BRK-B`,
+# never `ISSUER:BRK.B`, and upper-case venue symbols (`BINANCE:BTCUSDT`).
+SCOPE_RE = re.compile(r"^(?=[A-Z0-9_:-]*[A-Z])[A-Z0-9_:-]{1,64}$")
 FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 DOMAINS = frozenset({"macro", "cal", "rates", "cb", "pos", "inv", "corp", "venue", "mkt", "text", "hub"})

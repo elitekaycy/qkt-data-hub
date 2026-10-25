@@ -31,7 +31,9 @@ fields:
 Then `hub validate` and `hub collect inv.us.eia_crude`. Nothing else changes.
 
 Available parsers: `percent_or_number`, `human_number`, `iso8601_with_offset`, `date_in_zone`,
-`enum_ordinal`, `boolean`. Unknown keys anywhere in the file are rejected at load.
+`enum_ordinal`, `boolean`. A field's `null_if` lists exact values stored as null; `null_if_prefix`
+(e.g. `["<", ">"]`) does the same for values that start with one of the prefixes, such as a
+forecast printed as a bound. Unknown keys anywhere in the file are rejected at load.
 
 ## 2. A source no mapping can describe
 

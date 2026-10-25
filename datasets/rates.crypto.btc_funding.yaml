@@ -1,0 +1,30 @@
+# Binance BTCUSDT perpetual funding rate, paid every 8h between longs and shorts. Sustained
+# positive funding means longs are paying shorts to stay long -- crowded, leveraged bullishness,
+# a mean-reversion/squeeze-risk input rather than a directional signal on its own, the same
+# role CFTC CoT plays for gold. Keyless, no auth, `limit=30` covers ~10 days at 8h cadence per
+# poll -- backfill beyond that needs `startTime`/`endTime` paging (not implemented here).
+dataset: rates.crypto.btc_funding
+version: 2
+title: BTCUSDT perpetual funding rate (Binance)
+scope_kind: instrument
+# Keyed by the funding instant: `period_start` keys at day granularity, which made each day's three
+# 8h prints three revisions of one fact (version 1).
+key: [effective_at, scope]
+collector:
+  kind: http_json
+  url: https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=30
+  cadence: 1h
+  max_observed_age: 12h
+  record_path: "$[*]"
+  scope: { const: BTCUSD }
+  effective_at: { from: fundingTime, parse: epoch_millis }
+  period_start: { from: fundingTime, parse: epoch_millis }
+  known_at: ingest_time
+  fields:
+    rate:       { from: fundingRate, parse: human_number }
+    mark_price: { from: markPrice, parse: human_number }
+fields:
+  rate:       { type: number, unit: fraction, null_policy: allow }
+  mark_price: { type: number, unit: usd, null_policy: allow }
+quality:
+  range: { rate: [-0.05, 0.05], mark_price: [0, 10000000] }

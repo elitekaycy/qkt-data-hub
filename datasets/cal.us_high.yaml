@@ -1,0 +1,18 @@
+# One record per scheduled event, written when it becomes the NEXT event: one minute after the
+# previous one (hub.collectors.schedule.PUBLISH_LAG_MS). `at` is the event instant, so a strategy
+# can measure time-to-event (`cal.at - NOW.epoch_ms`); `kind` says which release it is.
+# History comes from tools/schedule_backfill.py, which applies the same publication rule.
+dataset: cal.us_high
+version: 1
+title: Next high-impact US release: FOMC, CPI or employment report
+scope_kind: currency
+key: [effective_at, scope]
+collector:
+  kind: code
+  module: hub.collectors.schedule
+  class: ScheduleSource
+  schedule: schedules/us_events.csv
+  kinds: [fomc, cpi, nfp]
+fields:
+  at:   { type: timestamp, null_policy: forbid }
+  kind: { type: enum, values: [fomc, cpi, nfp], null_policy: forbid }

@@ -1,0 +1,323 @@
+# Scheduled US releases, maintained by hand from the official pages named in `source`.
+# Only meetings and releases that were on the published schedule appear: unscheduled FOMC
+# meetings, notation votes and the cancelled 2020-03-18 meeting are excluded, and releases
+# moved by the 2025 shutdown carry the date they actually came out (Oct 2025 CPI and NFP were
+# never published). Times are New York local; the collector converts with the zone.
+kind,date,time,zone,source
+nfp,2018-01-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-01-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2018-01-31,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2018-02-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-02-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2018-03-09,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-03-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2018-03-21,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2018-04-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-04-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2018-05-02,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2018-05-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-05-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2018-06-01,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-06-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2018-06-13,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2018-07-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-07-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2018-08-01,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2018-08-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-08-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2018-09-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-09-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2018-09-26,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2018-10-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-10-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2018-11-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+fomc,2018-11-08,14:00,America/New_York,federalreserve.gov FOMC calendars
+cpi,2018-11-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2018-12-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2018-12-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2018-12-19,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2019-01-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-01-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2019-01-30,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2019-02-01,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-02-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2019-03-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-03-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2019-03-20,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2019-04-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-04-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2019-05-01,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2019-05-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-05-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2019-06-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-06-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2019-06-19,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2019-07-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-07-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2019-07-31,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2019-08-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-08-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2019-09-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-09-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2019-09-18,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2019-10-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-10-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2019-10-30,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2019-11-01,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-11-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2019-12-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2019-12-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2019-12-11,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2020-01-10,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-01-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2020-01-29,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2020-02-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-02-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2020-03-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-03-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2020-04-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-04-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2020-04-29,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2020-05-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-05-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2020-06-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-06-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2020-06-10,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2020-07-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-07-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2020-07-29,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2020-08-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-08-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2020-09-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-09-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2020-09-16,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2020-10-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-10-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2020-11-05,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2020-11-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-11-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2020-12-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2020-12-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2020-12-16,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2021-01-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-01-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2021-01-27,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2021-02-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-02-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2021-03-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-03-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2021-03-17,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2021-04-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-04-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2021-04-28,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2021-05-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-05-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2021-06-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-06-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2021-06-16,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2021-07-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-07-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2021-07-28,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2021-08-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-08-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2021-09-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-09-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2021-09-22,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2021-10-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-10-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2021-11-03,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2021-11-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-11-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2021-12-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2021-12-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2021-12-15,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2022-01-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-01-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2022-01-26,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2022-02-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-02-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2022-03-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-03-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2022-03-16,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2022-04-01,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-04-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2022-05-04,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2022-05-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-05-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2022-06-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-06-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2022-06-15,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2022-07-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-07-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2022-07-27,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2022-08-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-08-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2022-09-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-09-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2022-09-21,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2022-10-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-10-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2022-11-02,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2022-11-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-11-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2022-12-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2022-12-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2022-12-14,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2023-01-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-01-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2023-02-01,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2023-02-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-02-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2023-03-10,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-03-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2023-03-22,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2023-04-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-04-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2023-05-03,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2023-05-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-05-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2023-06-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-06-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2023-06-14,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2023-07-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-07-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2023-07-26,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2023-08-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-08-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2023-09-01,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-09-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2023-09-20,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2023-10-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-10-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2023-11-01,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2023-11-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-11-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2023-12-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2023-12-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2023-12-13,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2024-01-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-01-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2024-01-31,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2024-02-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-02-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2024-03-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-03-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2024-03-20,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2024-04-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-04-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2024-05-01,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2024-05-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-05-15,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2024-06-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-06-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2024-06-12,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2024-07-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-07-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2024-07-31,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2024-08-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-08-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2024-09-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-09-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2024-09-18,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2024-10-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-10-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2024-11-01,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+fomc,2024-11-07,14:00,America/New_York,federalreserve.gov FOMC calendars
+cpi,2024-11-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2024-12-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2024-12-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2024-12-18,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2025-01-10,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2025-01-15,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2025-01-29,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2025-02-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2025-02-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2025-03-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2025-03-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2025-03-19,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2025-04-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2025-04-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2025-05-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+fomc,2025-05-07,14:00,America/New_York,federalreserve.gov FOMC calendars
+cpi,2025-05-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2025-06-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2025-06-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2025-06-18,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2025-07-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2025-07-15,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2025-07-30,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2025-08-01,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2025-08-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2025-09-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2025-09-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2025-09-17,14:00,America/New_York,federalreserve.gov FOMC calendars
+cpi,2025-10-24,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2025-10-29,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2025-11-20,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+fomc,2025-12-10,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2025-12-16,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2025-12-18,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2026-01-09,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-01-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2026-01-28,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2026-02-11,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-02-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2026-03-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-03-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2026-03-18,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2026-04-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-04-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2026-04-29,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2026-05-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-05-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2026-06-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-06-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2026-06-17,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2026-07-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-07-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2026-07-29,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2026-08-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-08-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2026-09-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-09-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2026-09-16,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2026-10-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-10-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2026-10-28,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2026-11-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2026-11-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2026-12-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+fomc,2026-12-09,14:00,America/New_York,federalreserve.gov FOMC calendars
+cpi,2026-12-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2027-01-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-01-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2027-01-27,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2027-02-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-02-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2027-03-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-03-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2027-03-17,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2027-04-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-04-13,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2027-04-28,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2027-05-07,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-05-12,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2027-06-04,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+fomc,2027-06-09,14:00,America/New_York,federalreserve.gov FOMC calendars
+cpi,2027-06-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2027-07-02,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-07-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2027-07-28,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2027-08-06,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-08-11,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2027-09-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-09-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2027-09-15,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2027-10-08,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-10-14,08:30,America/New_York,bls.gov CPI release archive and schedule
+fomc,2027-10-27,14:00,America/New_York,federalreserve.gov FOMC calendars
+nfp,2027-11-05,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+cpi,2027-11-10,08:30,America/New_York,bls.gov CPI release archive and schedule
+nfp,2027-12-03,08:30,America/New_York,bls.gov Employment Situation archive and schedule
+fomc,2027-12-08,14:00,America/New_York,federalreserve.gov FOMC calendars
+cpi,2027-12-10,08:30,America/New_York,bls.gov CPI release archive and schedule

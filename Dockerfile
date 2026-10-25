@@ -9,6 +9,7 @@ WORKDIR /app
 COPY hub ./hub
 COPY hubread ./hubread
 COPY datasets ./datasets
+COPY tools ./tools
 RUN chown -R hub:hub /app
 
 USER hub
@@ -20,5 +21,8 @@ VOLUME /data
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
   CMD ["python", "-m", "hub", "--root", "/data", "--datasets", "/app/datasets", "health"]
 
+# The daemon and its read-only web view in one process. Publish the port on loopback or a private
+# address; the view has no authentication.
+EXPOSE 8090
 ENTRYPOINT ["python", "-m", "hub", "--root", "/data", "--datasets", "/app/datasets"]
-CMD ["run"]
+CMD ["run", "--ui-host", "0.0.0.0", "--ui-port", "8090"]

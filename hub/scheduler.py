@@ -125,6 +125,11 @@ class Scheduler:
                     state.last_success = now
                     state.next_due = now + self._interval_for(name, state)
                 except HubError as e:
+                    from hub import status
+
+                    status.record_collect(
+                        self._config.root, name, {"at": int(now * 1000), "ok": False, "error": str(e)}
+                    )
                     state.consecutive_failures += 1
                     state.next_due = now + self._config.retry_seconds
                     log_every(f"collect-fail:{name}", 10, f"collect[{name}] failed: {e}")

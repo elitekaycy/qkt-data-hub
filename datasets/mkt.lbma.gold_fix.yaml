@@ -1,0 +1,17 @@
+# LBMA gold price fixing (London Bullion Market Association), USD per troy ounce, twice daily
+# (AM/PM auctions). Real, free, keyless, history to 1968. This is a benchmark PRICE series, not
+# a driver -- kept here because it's the official reference price this hub's gold/metals pipeline
+# slot calls for (World Gold Council / LBMA / SGE), useful as ground truth or a cross-venue basis
+# check against Exness quotes, not as a signal. Backfill-only: the source has no documented
+# incremental/webhook API, and the array-valued payload ([USD, GBP, EUR] per row) needs
+# index-based extraction a declarative http_json mapping can't express, so this is populated via
+# `hub backfill`, not a live collector, until a custom Source is worth writing for it.
+dataset: mkt.lbma.gold_fix
+version: 1
+title: LBMA gold price fixing (AM), USD/oz
+scope_kind: instrument
+key: [period_start, scope]
+fields:
+  usd_per_oz: { type: number, unit: usd, null_policy: allow }
+quality:
+  range: { usd_per_oz: [0, 20000] }

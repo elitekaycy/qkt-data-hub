@@ -31,6 +31,7 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 DATASETS = pathlib.Path(__file__).resolve().parents[1] / "datasets"
 CALENDAR = DATASETS / "cal.high_impact.yaml"
 REAL_YIELD = DATASETS / "rates.us.dfii10.yaml"
+FUNDING = DATASETS / "rates.crypto.btc_funding.yaml"
 
 
 def _serve(body: bytes, content_type: str, status: int = 200) -> tuple[str, Any]:
@@ -167,6 +168,54 @@ class DeclarativeCalendarTest(unittest.TestCase):
         want = int(dt.datetime.fromisoformat(row["date"]).timestamp() * 1000)
         match = next(c for c in self.candidates if c.effective_at == want)
         self.assertEqual(match.scope, row["country"].upper())
+
+    def test_one_unreadable_row_is_quarantined_and_the_rest_go_through(self) -> None:
+        # A row that cannot be a number must not cost the week's other releases.
+        rows = json.loads(self.blob.body)
+        bad = dict(next(r for r in rows if r.get("impact") == "High"), forecast="1.2.5%")
+        blob = RawBlob(body=json.dumps([bad] + rows).encode(), content_type="application/json", fetched_at=1)
+        candidates = self.source.parse(blob)
+        self.assertEqual(len(candidates), len(self.candidates) + 1)
+        marked = [c for c in candidates if "parse_error" in c.extra]
+        self.assertEqual(len(marked), 1)
+        root = pathlib.Path(tempfile.mkdtemp())
+        result = ingest(candidates, self.schema, RevisionIndex(), {}, 1_760_000_000_000, source="ff",
+                        quarantine=Quarantine(root))
+        self.assertEqual(result.quarantined, 1)
+        self.assertEqual(result.written + result.duplicates, len(self.candidates))
+        logged = next((root / "quarantine" / "cal.high_impact").glob("*.ndjson")).read_text()
+        self.assertIn("1.2.5%", logged)
+
+    def test_a_forecast_printed_as_a_bound_is_null_and_the_event_is_kept(self) -> None:
+        # Seen live on 2026-10-25: ForexFactory wrote a BOJ forecast as the range "<1.25%". The
+        # release is still a scheduled high-impact event; only the bound is not a number.
+        rows = json.loads(self.blob.body)
+        bound = dict(next(r for r in rows if r.get("impact") == "High"), forecast="<1.25%", previous="> 0.5%")
+        blob = RawBlob(body=json.dumps([bound]).encode(), content_type="application/json", fetched_at=1)
+        (candidate,) = self.source.parse(blob)
+        self.assertNotIn("parse_error", candidate.extra)
+        self.assertIsNone(candidate.fields["forecast"])
+        self.assertIsNone(candidate.fields["previous"])
+
+    def test_null_if_prefix_must_be_a_list_of_strings(self) -> None:
+        collector = dict(self.schema.raw["collector"])
+        collector["fields"] = dict(collector["fields"], actual={"from": "actual", "null_if_prefix": "<"})
+        with self.assertRaises(ConfigError):
+            DeclarativeSource("cal.high_impact", collector)
+
+    def test_rows_before_the_format_floor_are_skipped_not_quarantined(self) -> None:
+        # FRED returns history from the 1950s; the format cannot hold anything before 2000, so
+        # those rows are not facts this store can keep, and refusing them every poll is noise.
+        rows = json.loads(self.blob.body)
+        old = dict(next(r for r in rows if r.get("impact") == "High"), date="1999-12-31T08:30:00-05:00")
+        blob = RawBlob(body=json.dumps([old] + rows).encode(), content_type="application/json", fetched_at=1)
+        self.assertEqual(len(self.source.parse(blob)), len(self.candidates))
+
+    def test_a_declared_since_skips_rows_before_the_datasets_coverage(self) -> None:
+        collector = dict(self.schema.raw["collector"], since="2030-01-01")
+        self.assertEqual(DeclarativeSource("cal.high_impact", collector).parse(self.blob), [])
+        with self.assertRaises(ConfigError):
+            DeclarativeSource("cal.high_impact", dict(collector, since="soon"))
 
     def test_an_unfilled_actual_is_none_not_zero(self) -> None:
         # A pre-release row has no `actual` key at all. Turning that into 0 would invent a
@@ -413,12 +462,28 @@ class MaxObservedAgeTest(unittest.TestCase):
             quarantine=Quarantine(root),
         )
         self.assertEqual(result.written, 1, "only day 4 is recent enough to be live-observed")
-        self.assertEqual(result.quarantined, 5)
+        # The four already-backfilled days come back unchanged: duplicates, not rejections. Only
+        # the ancient row the store has never held is refused.
+        self.assertEqual(result.duplicates, 4)
+        self.assertEqual(result.quarantined, 1)
         self.assertEqual(result.revisions, 0, "the four already-backfilled days must stay untouched")
         day1_key = build_key(self.schema, self._candidate(self.day1, "1.00", 0))
         self.assertEqual(index.seen(self.schema.name, day1_key)[0], 1)
         day4_record = result.records[0]
         self.assertEqual(day4_record.fields["change_1d"], "0.1")
+
+    def test_a_stale_row_whose_value_changed_is_still_refused(self) -> None:
+        # A revised old value is new information this source cannot claim to have just observed;
+        # it must go through backfill, not slip in as a live revision.
+        index, history = self._backfill()
+        now = self.day4 + 1_000
+        changed = [self._candidate(self.day1, "9.99", 0)]
+        result = ingest(
+            changed, self.schema, index, history, now, source="fred", live=True, max_observed_age_ms=12 * 3_600_000
+        )
+        self.assertEqual(result.quarantined, 1)
+        self.assertEqual(result.duplicates, 0)
+        self.assertEqual(result.written, 0)
 
     def test_backfill_is_never_subject_to_the_age_bound(self) -> None:
         # The whole point of `backfill` is submitting old facts honestly, stamped `derived`; the
@@ -457,3 +522,28 @@ class RegistryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubDailyKeyTest(unittest.TestCase):
+    """Three 8h funding prints on one day are three facts, not three revisions of one."""
+
+    def test_each_funding_print_is_its_own_fact_and_a_stale_resend_is_a_duplicate(self) -> None:
+        schema = load_schema(FUNDING)
+        source = DeclarativeSource(schema.name, schema.raw["collector"])
+        day = int(dt.datetime(2026, 10, 24, tzinfo=dt.UTC).timestamp() * 1000)
+        prints = [
+            {"symbol": "BTCUSDT", "fundingTime": day + h * 3_600_000, "fundingRate": "0.0001", "markPrice": "80000"}
+            for h in (0, 8, 16)
+        ]
+        blob = RawBlob(json.dumps(prints).encode(), "application/json", day)
+        index, history = RevisionIndex(), {}
+        backfilled = ingest(
+            source.parse(blob), schema, index, history, day + 17 * 3_600_000, source="binance", live=False
+        )
+        self.assertEqual([r.revision for r in backfilled.records], [1, 1, 1])
+        self.assertEqual(len({r.key for r in backfilled.records}), 3)
+        resent = ingest(
+            source.parse(blob), schema, index, history, day + 3 * 86_400_000,
+            source="binance", live=True, max_observed_age_ms=12 * 3_600_000,
+        )
+        self.assertEqual((resent.duplicates, resent.quarantined, resent.written), (3, 0, 0))

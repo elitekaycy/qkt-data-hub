@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-from hub import __version__
+from hub import __version__, status
 from hub.collectors import Candidate
 from hub.compiler import compile_all, verify
 from hub.config import HubConfig
@@ -96,9 +96,11 @@ def collect_once(
     if source is None:
         raise HubError(f"dataset {dataset!r} has no collector; it is derived or internal")
     schema = registry.schema(dataset)
+    started = _now_ms()
     blob = source.fetch(timeout)
     if blob is None:
         log(f"collect[{dataset}] no usable response; keeping the last known state")
+        status.record_collect(root, dataset, {"at": started, "ok": False, "error": "no usable response"})
         return 0
     raw_ref = RawStore(root).put(blob)
     candidates: list[Candidate] = source.parse(blob)
@@ -127,6 +129,22 @@ def collect_once(
     log(
         f"collect[{dataset}] written={result.written} duplicates={result.duplicates} "
         f"revisions={result.revisions} quarantined={result.quarantined}"
+    )
+    status.record_collect(
+        root,
+        dataset,
+        {
+            "at": started,
+            "ok": True,
+            "error": None,
+            "candidates": len(candidates),
+            "written": result.written,
+            "duplicates": result.duplicates,
+            "revisions": result.revisions,
+            "quarantined": result.quarantined,
+            "raw_ref": raw_ref,
+            "bytes": len(blob.body),
+        },
     )
     return result.written
 
@@ -254,13 +272,34 @@ def _cmd_backfill(args: argparse.Namespace, config: HubConfig, registry: Registr
     return EXIT_OK
 
 
+def _cmd_ui(args: argparse.Namespace, config: HubConfig, registry: Registry) -> int:
+    from hub.ui import serve
+
+    serve(config.root, registry, config.policy, args.host, args.port)
+    return EXIT_OK
+
+
 def _cmd_run(args: argparse.Namespace, config: HubConfig, registry: Registry) -> int:
-    """The daemon: poll every collecting dataset on its cadence, compile, and beat the heartbeat."""
-    scheduler = Scheduler(config, registry)
-    return scheduler.run(once=args.once)
+    """The daemon: poll every collecting dataset on its cadence, compile, and beat the heartbeat.
+
+    With `--ui-port` it also serves the read-only view from the same process, so one container
+    runs the whole hub.
+    """
+    httpd = None
+    if args.ui_port is not None:
+        from hub.ui import serve_in_background
+
+        httpd = serve_in_background(config.root, registry, config.policy, args.ui_host, args.ui_port)
+    try:
+        return Scheduler(config, registry).run(once=args.once)
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
 
 
 _COMMANDS = {
+    "ui": _cmd_ui,
     "ls": _cmd_ls,
     "validate": _cmd_validate,
     "collect": _cmd_collect,
@@ -296,8 +335,13 @@ def build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("dataset")
     backfill.add_argument("--file", required=True)
     backfill.add_argument("--source", default="backfill")
+    ui = sub.add_parser("ui", help="serve a read-only web view of the store")
+    ui.add_argument("--host", default="127.0.0.1", help="bind address; 0.0.0.0 exposes it to the network")
+    ui.add_argument("--port", type=int, default=8090)
     run = sub.add_parser("run", help="run the collector daemon")
     run.add_argument("--once", action="store_true", help="one pass over every due source, then exit")
+    run.add_argument("--ui-port", type=int, help="also serve the read-only web view on this port")
+    run.add_argument("--ui-host", default="127.0.0.1", help="bind address for the view; 0.0.0.0 exposes it")
     return parser
 
 

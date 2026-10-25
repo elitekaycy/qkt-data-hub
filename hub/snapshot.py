@@ -40,6 +40,8 @@ def _encode_field_value(spec: FieldSpec, value: Any) -> int:
             raise StoreError(f"field {spec.name!r} value {value!r} is not a decimal") from e
         if scaled != scaled.to_integral_value():
             raise StoreError(f"field {spec.name!r} value {value!r} needs more than {SCALE} decimal places")
+        if not (NULL_SENTINEL < int(scaled) < 2**63):
+            raise StoreError(f"field {spec.name!r} value {value!r} is outside the 64-bit scale-{SCALE} range")
         return int(scaled)
     if spec.type == FieldType.BOOL:
         if not isinstance(value, bool):

@@ -77,6 +77,20 @@ class SchemaTest(unittest.TestCase):
         with self.assertRaisesRegex(SchemaError, "range"):
             self._load(SCHEMA).validate_payload({"impact": 2, "actual": "99"})
 
+    def test_validate_payload_rejects_a_number_too_large_for_the_snapshot(self):
+        schema = self._load(SCHEMA.replace("  range: { actual: [-5, 5] }", "  range: {}"))
+        with self.assertRaisesRegex(SchemaError, "storable range"):
+            schema.validate_payload({"impact": 2, "actual": "3000000000000"})
+
+    def test_validate_payload_accepts_the_largest_storable_number(self):
+        schema = self._load(SCHEMA.replace("  range: { actual: [-5, 5] }", "  range: {}"))
+        out = schema.validate_payload({"impact": 2, "actual": "92233720368.54775807"})
+        self.assertEqual(out["actual"], "92233720368.54775807")
+
+    def test_validate_payload_rejects_more_than_eight_decimal_places(self):
+        with self.assertRaisesRegex(SchemaError, "decimal places"):
+            self._load(SCHEMA).validate_payload({"impact": 2, "actual": "0.000000001"})
+
     def test_validate_payload_canonicalises_decimals(self):
         out = self._load(SCHEMA).validate_payload({"impact": 2, "actual": "0.30"})
         self.assertEqual(out["actual"], "0.3")

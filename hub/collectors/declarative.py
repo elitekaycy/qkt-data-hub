@@ -12,6 +12,7 @@ nothing, which is exactly the failure this project exists to make impossible.
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import json
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from hub.collectors.http import HttpSource
 from hub.parse import apply as apply_parser
 from hub.rawstore import RawBlob
 from hubread.errors import ConfigError, ParseError
-from hubread.record import Availability
+from hubread.record import MIN_TIMESTAMP_MS, Availability
 
 _COLLECTOR_KEYS = frozenset(
     {
@@ -42,12 +43,13 @@ _COLLECTOR_KEYS = frozenset(
         "fields",
         "availability",
         "csv_value_column",
+        "since",
     }
 )
 _NEAR_EVENT_KEYS = frozenset({"before", "after", "every", "anchor"})
 _SCOPE_KEYS = frozenset({"from", "map", "const", "upper"})
 _TIME_KEYS = frozenset({"from", "parse", "zone", "hour", "const"})
-_FIELD_KEYS = frozenset({"from", "parse", "map", "null_if", "const", "zone", "hour"})
+_FIELD_KEYS = frozenset({"from", "parse", "map", "null_if", "null_if_prefix", "const", "zone", "hour"})
 _KINDS = frozenset({"http_json", "http_csv"})
 
 
@@ -152,6 +154,15 @@ class DeclarativeSource:
         self._http = HttpSource(dataset, url, **kwargs)
         self._record_path = str(block.get("record_path", "$[*]"))
         self._where = _require_map(block.get("where") or {}, f"{dataset}.collector.where")
+        # The first date this dataset covers. A source that returns decades of history would
+        # otherwise offer every older row on every poll, to be refused into quarantine forever.
+        self._since_ms = MIN_TIMESTAMP_MS
+        if "since" in block:
+            try:
+                since_day = dt.date.fromisoformat(str(block["since"]))
+            except ValueError as e:
+                raise ConfigError(f"{dataset}.collector.since: not a date: {block['since']!r}") from e
+            self._since_ms = int(dt.datetime.combine(since_day, dt.time(0, 0), tzinfo=dt.UTC).timestamp() * 1000)
         self._scope = _reject_unknown(f"{dataset}.collector.scope", block.get("scope") or {}, _SCOPE_KEYS)
         self._effective = _reject_unknown(
             f"{dataset}.collector.effective_at", block.get("effective_at") or {}, _TIME_KEYS
@@ -165,6 +176,9 @@ class DeclarativeSource:
         self._fields: dict[str, dict[str, Any]] = {}
         for name, spec in _require_map(block.get("fields") or {}, f"{dataset}.collector.fields").items():
             self._fields[name] = _reject_unknown(f"{dataset}.collector.fields.{name}", spec, _FIELD_KEYS)
+            prefixes = self._fields[name].get("null_if_prefix", [])
+            if not isinstance(prefixes, list) or not all(isinstance(p, str) and p for p in prefixes):
+                raise ConfigError(f"{dataset}.collector.fields.{name}.null_if_prefix must list non-empty strings")
         self._availability = Availability(str(block.get("availability", "observed")))
         self._csv_value_column = block.get("csv_value_column")
         max_age = block.get("max_observed_age")
@@ -252,6 +266,9 @@ class DeclarativeSource:
         for sentinel in spec.get("null_if") or []:
             if raw == sentinel or (isinstance(raw, str) and raw.strip() == str(sentinel).strip()):
                 return None
+        # A value printed as a bound ("<1.25%") states a range, not a number; null keeps the row.
+        if isinstance(raw, str) and raw.strip().startswith(tuple(spec.get("null_if_prefix") or ())):
+            return None
         parser_name = spec.get("parse")
         if parser_name is None:
             return None if raw is None else str(raw)
@@ -280,7 +297,30 @@ class DeclarativeSource:
             effective_at = self._resolve_time(self._effective, row, f"{self._dataset}.effective_at")
             if effective_at is None:
                 continue
-            fields = {name: self._resolve_field(name, spec, row) for name, spec in self._fields.items()}
+            if effective_at < self._since_ms:
+                # Before the dataset's declared coverage (`since`), or before 2000, which the format
+                # cannot hold. A source returning its whole history (FRED from 1954) would otherwise
+                # have every such row refused into quarantine on every poll, burying real refusals.
+                continue
+            try:
+                fields = {name: self._resolve_field(name, spec, row) for name, spec in self._fields.items()}
+            except ParseError as e:
+                # One row the parser cannot read (a range like "<1.25%" where a number belongs)
+                # is that row's problem, not the batch's: it is handed on marked, and the
+                # pipeline quarantines it with this reason while every other row goes through.
+                out.append(
+                    Candidate(
+                        scope=scope,
+                        key="",
+                        effective_at=effective_at,
+                        fields={},
+                        known_at=None,
+                        availability=self._availability,
+                        title=str(row.get("title", "")),
+                        extra={"parse_error": str(e), "row": json.dumps(row, default=str, sort_keys=True)[:2000]},
+                    )
+                )
+                continue
             period_start = (
                 self._resolve_time(self._period_start, row, f"{self._dataset}.period_start")
                 if self._period_start
