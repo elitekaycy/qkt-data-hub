@@ -93,7 +93,9 @@ def main() -> int:
         data = Path(a.data_root).resolve()
         cmd = [
             "docker", "run", "--rm", "--user", "root", "-v", f"{w}:{w}", "-v", f"{store}:{store}:ro",
-            "-v", f"{data}:{data}:ro", *[x for m in a.extra_mount for x in ("-v", f"{m}:{m}:ro")], "-w", str(w), "--entrypoint", "qkt", a.image, "backtest", "probe.qkt",
+            "-v", f"{data}:{data}:ro",
+            *[x for m in a.extra_mount for x in ("-v", f"{m}:{m}:ro")],
+            "-w", str(w), "--entrypoint", "qkt", a.image, "backtest", "probe.qkt",
             "--from", a.start, "--to", a.end, "--data-root", str(data), "--hub-root", str(store),
             "--starting-balance", "100000", "--bars", "--no-fetch", "--allow-incomplete", "--report-dir", "rep",
         ]
