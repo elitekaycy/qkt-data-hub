@@ -9,6 +9,7 @@ WORKDIR /app
 COPY hub ./hub
 COPY hubread ./hubread
 COPY datasets ./datasets
+COPY tools ./tools
 RUN chown -R hub:hub /app
 
 USER hub

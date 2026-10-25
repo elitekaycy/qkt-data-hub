@@ -15,7 +15,7 @@ from hub.schema import DatasetSchema, load_schema
 from hubread.errors import ConfigError
 
 
-def _load_code_source(dataset: str, collector: dict[str, Any]) -> Any:
+def _load_code_source(dataset: str, collector: dict[str, Any], datasets_dir: Path) -> Any:
     """Instantiate a hand-written `Source` named by `collector.module`/`collector.class`.
 
     This is the registration point `docs/EXTENDING.md` describes for a feed no declarative
@@ -31,6 +31,15 @@ def _load_code_source(dataset: str, collector: dict[str, Any]) -> Any:
     cls = getattr(module, str(class_name), None)
     if cls is None:
         raise ConfigError(f"{dataset}.collector: {module_name}.{class_name} not found")
+    options = {k: v for k, v in collector.items() if k not in ("kind", "module", "class")}
+    # A collector that takes settings (a schedule file, a list of event kinds) declares a
+    # `from_config` constructor; one that does not must not be handed settings it would ignore,
+    # because a silently ignored key is a check that never runs.
+    factory = getattr(cls, "from_config", None)
+    if factory is not None:
+        return factory(dataset, options, datasets_dir)
+    if options:
+        raise ConfigError(f"{dataset}.collector: {class_name} takes no options, got {sorted(options)!r}")
     return cls()
 
 
@@ -59,7 +68,7 @@ class Registry:
                 if kind.startswith("http_"):
                     sources[schema.name] = DeclarativeSource(schema.name, collector, opener=opener)
                 elif kind == "code":
-                    sources[schema.name] = _load_code_source(schema.name, collector)
+                    sources[schema.name] = _load_code_source(schema.name, collector, directory)
         return cls(schemas, sources)
 
     def datasets(self) -> list[str]:
