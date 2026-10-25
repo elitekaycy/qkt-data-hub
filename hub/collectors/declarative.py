@@ -22,7 +22,7 @@ from hub.collectors.http import HttpSource
 from hub.parse import apply as apply_parser
 from hub.rawstore import RawBlob
 from hubread.errors import ConfigError, ParseError
-from hubread.record import Availability
+from hubread.record import MIN_TIMESTAMP_MS, Availability
 
 _COLLECTOR_KEYS = frozenset(
     {
@@ -279,6 +279,11 @@ class DeclarativeSource:
                 continue
             effective_at = self._resolve_time(self._effective, row, f"{self._dataset}.effective_at")
             if effective_at is None:
+                continue
+            if effective_at < MIN_TIMESTAMP_MS:
+                # The format cannot hold a fact before 2000 (`hubread.record.MIN_TIMESTAMP_MS`). A
+                # source that returns its whole history (FRED from 1954) would otherwise have every
+                # such row refused into quarantine on every poll, burying the refusals that matter.
                 continue
             try:
                 fields = {name: self._resolve_field(name, spec, row) for name, spec in self._fields.items()}

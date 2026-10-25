@@ -186,6 +186,14 @@ class DeclarativeCalendarTest(unittest.TestCase):
         logged = next((root / "quarantine" / "cal.high_impact").glob("*.ndjson")).read_text()
         self.assertIn("<1.25%", logged)
 
+    def test_rows_before_the_format_floor_are_skipped_not_quarantined(self) -> None:
+        # FRED returns history from the 1950s; the format cannot hold anything before 2000, so
+        # those rows are not facts this store can keep, and refusing them every poll is noise.
+        rows = json.loads(self.blob.body)
+        old = dict(next(r for r in rows if r.get("impact") == "High"), date="1999-12-31T08:30:00-05:00")
+        blob = RawBlob(body=json.dumps([old] + rows).encode(), content_type="application/json", fetched_at=1)
+        self.assertEqual(len(self.source.parse(blob)), len(self.candidates))
+
     def test_an_unfilled_actual_is_none_not_zero(self) -> None:
         # A pre-release row has no `actual` key at all. Turning that into 0 would invent a
         # surprise of exactly minus the forecast on every upcoming release.
