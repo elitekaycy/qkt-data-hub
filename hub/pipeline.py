@@ -206,16 +206,15 @@ def ingest(
     wall = clock() if clock is not None else now_ms
     for candidate in candidates:
         try:
+            if "parse_error" in candidate.extra:
+                problem = candidate.extra["parse_error"]
+                raise HubError(f"row could not be parsed: {problem}: {candidate.extra.get('row', '')}")
             known_at = candidate.known_at if candidate.known_at is not None else now_ms
             availability = Availability.OBSERVED if live else candidate.availability
+            stale = False
             if live:
                 known_at = now_ms
-                if max_observed_age_ms is not None and wall - candidate.effective_at > max_observed_age_ms:
-                    raise HubError(
-                        f"effective_at {candidate.effective_at} is more than "
-                        f"{max_observed_age_ms}ms old; this source cannot claim to have just "
-                        "observed it live -- backfill it instead"
-                    )
+                stale = max_observed_age_ms is not None and wall - candidate.effective_at > max_observed_age_ms
             if known_at > wall + skew_tolerance_ms:
                 raise HubError(f"known_at {known_at} runs ahead of the writer clock {wall}")
             key = build_key(schema, candidate)
@@ -241,6 +240,20 @@ def ingest(
                 raw_ref=raw_ref,
                 fields=payload,
             )
+            if stale:
+                # A source that returns its whole history re-sends every old row on every poll.
+                # An old row identical to what the store already holds is a duplicate, not a
+                # rejection: quarantining it would bury real refusals under thousands a day. An
+                # old row the store lacks, or one whose value changed, is still refused.
+                prior = index.seen(schema.name, key)
+                if prior is not None and prior[1] == record.payload_hash():
+                    result.duplicates += 1
+                    continue
+                raise HubError(
+                    f"effective_at {candidate.effective_at} is more than "
+                    f"{max_observed_age_ms}ms old; this source cannot claim to have just "
+                    "observed it live -- backfill it instead"
+                )
         except (HubError, ValueError, ArithmeticError) as e:
             result.quarantined += 1
             if quarantine is not None:

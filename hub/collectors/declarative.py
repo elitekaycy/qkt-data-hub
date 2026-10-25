@@ -280,7 +280,25 @@ class DeclarativeSource:
             effective_at = self._resolve_time(self._effective, row, f"{self._dataset}.effective_at")
             if effective_at is None:
                 continue
-            fields = {name: self._resolve_field(name, spec, row) for name, spec in self._fields.items()}
+            try:
+                fields = {name: self._resolve_field(name, spec, row) for name, spec in self._fields.items()}
+            except ParseError as e:
+                # One row the parser cannot read (a range like "<1.25%" where a number belongs)
+                # is that row's problem, not the batch's: it is handed on marked, and the
+                # pipeline quarantines it with this reason while every other row goes through.
+                out.append(
+                    Candidate(
+                        scope=scope,
+                        key="",
+                        effective_at=effective_at,
+                        fields={},
+                        known_at=None,
+                        availability=self._availability,
+                        title=str(row.get("title", "")),
+                        extra={"parse_error": str(e), "row": json.dumps(row, default=str, sort_keys=True)[:2000]},
+                    )
+                )
+                continue
             period_start = (
                 self._resolve_time(self._period_start, row, f"{self._dataset}.period_start")
                 if self._period_start

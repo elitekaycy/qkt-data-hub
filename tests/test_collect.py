@@ -168,6 +168,24 @@ class DeclarativeCalendarTest(unittest.TestCase):
         match = next(c for c in self.candidates if c.effective_at == want)
         self.assertEqual(match.scope, row["country"].upper())
 
+    def test_one_unreadable_row_is_quarantined_and_the_rest_go_through(self) -> None:
+        # Seen live on 2026-10-25: ForexFactory wrote a BOJ forecast as the range "<1.25%". That
+        # row cannot be a number, but it must not cost the week's other releases.
+        rows = json.loads(self.blob.body)
+        bad = dict(next(r for r in rows if r.get("impact") == "High"), forecast="<1.25%")
+        blob = RawBlob(body=json.dumps([bad] + rows).encode(), content_type="application/json", fetched_at=1)
+        candidates = self.source.parse(blob)
+        self.assertEqual(len(candidates), len(self.candidates) + 1)
+        marked = [c for c in candidates if "parse_error" in c.extra]
+        self.assertEqual(len(marked), 1)
+        root = pathlib.Path(tempfile.mkdtemp())
+        result = ingest(candidates, self.schema, RevisionIndex(), {}, 1_760_000_000_000, source="ff",
+                        quarantine=Quarantine(root))
+        self.assertEqual(result.quarantined, 1)
+        self.assertEqual(result.written + result.duplicates, len(self.candidates))
+        logged = next((root / "quarantine" / "cal.high_impact").glob("*.ndjson")).read_text()
+        self.assertIn("<1.25%", logged)
+
     def test_an_unfilled_actual_is_none_not_zero(self) -> None:
         # A pre-release row has no `actual` key at all. Turning that into 0 would invent a
         # surprise of exactly minus the forecast on every upcoming release.
@@ -413,12 +431,28 @@ class MaxObservedAgeTest(unittest.TestCase):
             quarantine=Quarantine(root),
         )
         self.assertEqual(result.written, 1, "only day 4 is recent enough to be live-observed")
-        self.assertEqual(result.quarantined, 5)
+        # The four already-backfilled days come back unchanged: duplicates, not rejections. Only
+        # the ancient row the store has never held is refused.
+        self.assertEqual(result.duplicates, 4)
+        self.assertEqual(result.quarantined, 1)
         self.assertEqual(result.revisions, 0, "the four already-backfilled days must stay untouched")
         day1_key = build_key(self.schema, self._candidate(self.day1, "1.00", 0))
         self.assertEqual(index.seen(self.schema.name, day1_key)[0], 1)
         day4_record = result.records[0]
         self.assertEqual(day4_record.fields["change_1d"], "0.1")
+
+    def test_a_stale_row_whose_value_changed_is_still_refused(self) -> None:
+        # A revised old value is new information this source cannot claim to have just observed;
+        # it must go through backfill, not slip in as a live revision.
+        index, history = self._backfill()
+        now = self.day4 + 1_000
+        changed = [self._candidate(self.day1, "9.99", 0)]
+        result = ingest(
+            changed, self.schema, index, history, now, source="fred", live=True, max_observed_age_ms=12 * 3_600_000
+        )
+        self.assertEqual(result.quarantined, 1)
+        self.assertEqual(result.duplicates, 0)
+        self.assertEqual(result.written, 0)
 
     def test_backfill_is_never_subject_to_the_age_bound(self) -> None:
         # The whole point of `backfill` is submitting old facts honestly, stamped `derived`; the
