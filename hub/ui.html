@@ -179,7 +179,9 @@ function lineChart(points, field) {
   const W = 640, H = 170, L = 70, B = 22, T = 10;
   const px = (x) => L + (W - L - 10) * (x - x0) / (x1 - x0), py = (v) => T + (H - B - T) * (1 - (v - y0) / (y1 - y0));
   const isTime = /(^at$|_at$|time)/.test(field) && y0 > 9e11;
-  const lab = (v) => isTime ? new Date(v).toISOString().slice(0, 10) : (Math.abs(v) >= 1e4 ? v.toExponential(2) : +v.toFixed(4));
+  const short = (a, b) => Math.abs(b - a) < 2 * 864e5;
+  const stamp = (v, narrow) => narrow ? new Date(v).toISOString().slice(5, 16).replace("T", " ") : new Date(v).toISOString().slice(0, 10);
+  const lab = (v) => isTime ? stamp(v, short(y0, y1)) : (Math.abs(v) >= 1e4 ? v.toExponential(2) : +v.toFixed(4));
   let s = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(field)} as each value became known">`;
   [0, 0.5, 1].forEach((f) => { const v = y0 + (y1 - y0) * f, yy = py(v); s += `<line x1="${L}" x2="${W - 6}" y1="${yy}" y2="${yy}" stroke="var(--line)"/><text x="${L - 6}" y="${yy + 4}" font-size="10" text-anchor="end" fill="var(--muted)">${lab(v)}</text>`; });
   let d = "";
@@ -187,7 +189,7 @@ function lineChart(points, field) {
   d += ` H${px(x1).toFixed(1)}`;
   s += `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>`;
   const lp = points[points.length - 1]; s += `<circle cx="${px(lp[0])}" cy="${py(Number(lp[2]))}" r="3.5" fill="var(--accent)"/>`;
-  [x0, (x0 + x1) / 2, x1].forEach((x, i) => s += `<text x="${px(x)}" y="${H - 6}" font-size="10" text-anchor="${["start", "middle", "end"][i]}" fill="var(--muted)">${new Date(x).toISOString().slice(0, 10)}</text>`);
+  [x0, (x0 + x1) / 2, x1].forEach((x, i) => s += `<text x="${px(x)}" y="${H - 6}" font-size="10" text-anchor="${["start", "middle", "end"][i]}" fill="var(--muted)">${stamp(x, short(x0, x1))}</text>`);
   return s + `</svg><div class="muted" style="font-size:12px">Step line: the value a strategy saw, changing at each record's known_at. ${points.length} records.</div>`;
 }
 
