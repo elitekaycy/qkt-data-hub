@@ -280,9 +280,22 @@ def _cmd_ui(args: argparse.Namespace, config: HubConfig, registry: Registry) -> 
 
 
 def _cmd_run(args: argparse.Namespace, config: HubConfig, registry: Registry) -> int:
-    """The daemon: poll every collecting dataset on its cadence, compile, and beat the heartbeat."""
-    scheduler = Scheduler(config, registry)
-    return scheduler.run(once=args.once)
+    """The daemon: poll every collecting dataset on its cadence, compile, and beat the heartbeat.
+
+    With `--ui-port` it also serves the read-only view from the same process, so one container
+    runs the whole hub.
+    """
+    httpd = None
+    if args.ui_port is not None:
+        from hub.ui import serve_in_background
+
+        httpd = serve_in_background(config.root, registry, config.policy, args.ui_host, args.ui_port)
+    try:
+        return Scheduler(config, registry).run(once=args.once)
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
 
 
 _COMMANDS = {
@@ -327,6 +340,8 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--port", type=int, default=8090)
     run = sub.add_parser("run", help="run the collector daemon")
     run.add_argument("--once", action="store_true", help="one pass over every due source, then exit")
+    run.add_argument("--ui-port", type=int, help="also serve the read-only web view on this port")
+    run.add_argument("--ui-host", default="127.0.0.1", help="bind address for the view; 0.0.0.0 exposes it")
     return parser
 
 

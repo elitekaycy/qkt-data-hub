@@ -66,7 +66,14 @@ writer's status files under `<root>/status/`, and never writes.
 ```bash
 python -m hub --root ./hub-data ui                 # http://127.0.0.1:8090
 python -m hub --root ./hub-data ui --host 0.0.0.0  # only behind a firewall or tunnel
+python -m hub --root ./hub-data run --ui-port 8090  # the daemon serving the view itself
 ```
+
+The Docker image's default command is `run --ui-host 0.0.0.0 --ui-port 8090`: one container runs
+the collector and the view, and the port is published on loopback (or a private address) by
+`docker run -p 127.0.0.1:8090:8090` or `docker-compose.example.yml`. The view has no
+authentication, so never publish it on a public interface. A taken port fails the start rather
+than leaving a daemon without its view.
 
 Link to one dataset with `#<dataset>`, e.g. `http://127.0.0.1:8090/#cal.us_high`.
 

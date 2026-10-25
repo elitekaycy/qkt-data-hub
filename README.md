@@ -64,6 +64,12 @@ strategy in backtest and the same strategy in production read one format, not tw
 docker build -t qkt-data-hub:local .
 mkdir -p ./hub-data && chmod 777 ./hub-data
 
+# The whole hub in one container: the collector daemon plus the read-only web view
+# (pipeline graph, dataset health, charts, as-of explorer) at http://127.0.0.1:8090
+docker run -d --name qkt-data-hub --restart unless-stopped \
+  -p 127.0.0.1:8090:8090 -v "$PWD/hub-data:/data" qkt-data-hub:local
+
+# One-off commands against the same store
 docker run --rm -v "$PWD/hub-data:/data" qkt-data-hub:local ls
 docker run --rm -v "$PWD/hub-data:/data" qkt-data-hub:local collect
 docker run --rm -v "$PWD/hub-data:/data" qkt-data-hub:local compile

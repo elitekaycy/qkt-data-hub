@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import threading
 import time
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -220,9 +221,22 @@ def make_handler(root: Path, registry: Registry, policy: Policy) -> type[BaseHTT
     return Handler
 
 
-def serve(root: Path, registry: Registry, policy: Policy, host: str, port: int) -> None:
+def bind(root: Path, registry: Registry, policy: Policy, host: str, port: int) -> ThreadingHTTPServer:
+    """Bind the view now, so a taken port fails at start instead of after the daemon is up."""
     httpd = ThreadingHTTPServer((host, port), make_handler(Path(root), registry, policy))
-    print(f"hub ui on http://{host}:{port} (read-only) for {root}", flush=True)
+    print(f"hub ui on http://{host}:{httpd.server_address[1]} (read-only) for {root}", flush=True)
+    return httpd
+
+
+def serve_in_background(root: Path, registry: Registry, policy: Policy, host: str, port: int) -> ThreadingHTTPServer:
+    """Serve the view from a daemon thread beside the collector: one container, one process."""
+    httpd = bind(root, registry, policy, host, port)
+    threading.Thread(target=httpd.serve_forever, name="hub-ui", daemon=True).start()
+    return httpd
+
+
+def serve(root: Path, registry: Registry, policy: Policy, host: str, port: int) -> None:
+    httpd = bind(root, registry, policy, host, port)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

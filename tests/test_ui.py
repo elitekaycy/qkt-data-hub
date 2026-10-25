@@ -4,6 +4,7 @@ The UI is what an operator trusts to say "the hub is healthy", so it must report
 actually holds (records, windows, the newest visible fact) and must leave the store untouched.
 """
 import json
+import socket
 import threading
 import unittest
 import urllib.error
@@ -11,7 +12,9 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
+from hub.__main__ import main
 from hub.compiler import compile_all
 from hub.journal import JournalWriter
 from hub.registry import Registry
@@ -85,6 +88,33 @@ class UiTest(unittest.TestCase):
             httpd.shutdown()
             httpd.server_close()
         self.assertEqual(self._files(), before)
+
+    def test_run_serves_the_view_from_the_daemons_own_process(self):
+        # One container runs the whole hub: `run --ui-port` serves the view while the collector
+        # runs, and closes it when the collector stops.
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        url = f"http://127.0.0.1:{port}/api/state"
+        seen = {}
+
+        def collector(_self, once=False):
+            seen["datasets"] = [d["name"] for d in json.load(urllib.request.urlopen(url))["datasets"]]
+            return 0
+
+        datasets = str(Path(self.tmp.name) / "datasets")
+        with mock.patch("hub.__main__.Scheduler.run", collector):
+            code = main(["--root", str(self.root), "--datasets", datasets, "run", "--once", "--ui-port", str(port)])
+        self.assertEqual(code, 0)
+        self.assertEqual(seen["datasets"], ["cal.us_test"])
+        with self.assertRaises(urllib.error.URLError):
+            urllib.request.urlopen(url, timeout=2)
+
+    def test_run_without_a_ui_port_serves_nothing(self):
+        datasets = str(Path(self.tmp.name) / "datasets")
+        with mock.patch("hub.__main__.Scheduler.run", return_value=0), mock.patch("hub.ui.bind") as bind:
+            self.assertEqual(main(["--root", str(self.root), "--datasets", datasets, "run", "--once"]), 0)
+        bind.assert_not_called()
 
 
 if __name__ == "__main__":
