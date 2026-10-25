@@ -34,6 +34,7 @@ from hubread.journal import read_range  # noqa: E402
 from hubread.reader import Reader  # noqa: E402
 
 BAR_MS = 300_000
+JAVA_IMAGE = "eclipse-temurin:21-jre"
 NY = ZoneInfo("America/New_York")
 
 
@@ -74,9 +75,12 @@ def main() -> int:
     ap.add_argument("--from", dest="start", required=True)
     ap.add_argument("--to", dest="end", required=True)
     ap.add_argument("--lead", type=int, default=3_600_000, help="ms before an event the probe may enter")
-    ap.add_argument("--image", required=True)
+    ap.add_argument("--image", help="a released qkt image, e.g. ghcr.io/elitekaycy/qkt:v0.63.1")
+    ap.add_argument("--qkt-dist", help="a local qkt build (build/install/qkt), run in a Java 21 container instead")
     ap.add_argument("--extra-mount", action="append", default=[], help="read-only host path the price data links into")
     a = ap.parse_args()
+    if bool(a.image) == bool(a.qkt_dist):
+        ap.error("give exactly one of --image or --qkt-dist")
 
     start, end = ms(a.start), ms(a.end)
     store = Path(a.store).resolve()
@@ -95,7 +99,13 @@ def main() -> int:
             "docker", "run", "--rm", "--user", "root", "-v", f"{w}:{w}", "-v", f"{store}:{store}:ro",
             "-v", f"{data}:{data}:ro",
             *[x for m in a.extra_mount for x in ("-v", f"{m}:{m}:ro")],
-            "-w", str(w), "--entrypoint", "qkt", a.image, "backtest", "probe.qkt",
+            "-w", str(w),
+            *(
+                ["--entrypoint", "qkt", a.image]
+                if a.image
+                else ["-v", f"{Path(a.qkt_dist).resolve()}:/opt/qkt:ro", "--entrypoint", "/opt/qkt/bin/qkt", JAVA_IMAGE]
+            ),
+            "backtest", "probe.qkt",
             "--from", a.start, "--to", a.end, "--data-root", str(data), "--hub-root", str(store),
             "--starting-balance", "100000", "--bars", "--no-fetch", "--allow-incomplete", "--report-dir", "rep",
         ]
