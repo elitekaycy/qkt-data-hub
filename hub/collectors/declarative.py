@@ -12,6 +12,7 @@ nothing, which is exactly the failure this project exists to make impossible.
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import json
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ _COLLECTOR_KEYS = frozenset(
         "fields",
         "availability",
         "csv_value_column",
+        "since",
     }
 )
 _NEAR_EVENT_KEYS = frozenset({"before", "after", "every", "anchor"})
@@ -152,6 +154,15 @@ class DeclarativeSource:
         self._http = HttpSource(dataset, url, **kwargs)
         self._record_path = str(block.get("record_path", "$[*]"))
         self._where = _require_map(block.get("where") or {}, f"{dataset}.collector.where")
+        # The first date this dataset covers. A source that returns decades of history would
+        # otherwise offer every older row on every poll, to be refused into quarantine forever.
+        self._since_ms = MIN_TIMESTAMP_MS
+        if "since" in block:
+            try:
+                since_day = dt.date.fromisoformat(str(block["since"]))
+            except ValueError as e:
+                raise ConfigError(f"{dataset}.collector.since: not a date: {block['since']!r}") from e
+            self._since_ms = int(dt.datetime.combine(since_day, dt.time(0, 0), tzinfo=dt.UTC).timestamp() * 1000)
         self._scope = _reject_unknown(f"{dataset}.collector.scope", block.get("scope") or {}, _SCOPE_KEYS)
         self._effective = _reject_unknown(
             f"{dataset}.collector.effective_at", block.get("effective_at") or {}, _TIME_KEYS
@@ -280,10 +291,10 @@ class DeclarativeSource:
             effective_at = self._resolve_time(self._effective, row, f"{self._dataset}.effective_at")
             if effective_at is None:
                 continue
-            if effective_at < MIN_TIMESTAMP_MS:
-                # The format cannot hold a fact before 2000 (`hubread.record.MIN_TIMESTAMP_MS`). A
-                # source that returns its whole history (FRED from 1954) would otherwise have every
-                # such row refused into quarantine on every poll, burying the refusals that matter.
+            if effective_at < self._since_ms:
+                # Before the dataset's declared coverage (`since`), or before 2000, which the format
+                # cannot hold. A source returning its whole history (FRED from 1954) would otherwise
+                # have every such row refused into quarantine on every poll, burying real refusals.
                 continue
             try:
                 fields = {name: self._resolve_field(name, spec, row) for name, spec in self._fields.items()}

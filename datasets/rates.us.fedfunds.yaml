@@ -14,6 +14,7 @@ collector:
   url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS
   cadence: 6h
   max_observed_age: 45d
+  since: 2018-01-01
   record_path: "$[*]"
   scope: { const: USD }
   effective_at: { from: observation_date, parse: date_in_zone, zone: America/New_York, hour: 16 }

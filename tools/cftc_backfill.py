@@ -1,13 +1,11 @@
 """Turn a CFTC Commitments of Traders JSON export into backfill records for `hub backfill`.
 
-The CFTC publishes each Tuesday's positioning the following Friday at 15:30 ET. A CSV or JSON
-export of the historical series carries only the report date, not the publication instant, so
-history has to enter through `backfill`, stamped `derived` with an explicit availability rule a
-consumer can see and refuse: a report dated Tuesday D is treated as knowable the following
-Friday at 20:30 UTC (15:30 ET plus the fixed 5-hour offset the live collector's own zone
-resolution would also produce for a non-DST-sensitive publication time -- the CFTC always
-publishes on the U.S. business calendar, so this stays a conservative, declared estimate rather
-than an exact vintage).
+The CFTC publishes each report at 15:30 New York time, normally on the Friday after its "as of"
+date, later in holiday weeks and much later after a lapse in appropriations. A historical export
+carries only the report date, so history enters through `backfill`, stamped `derived`, at the
+release instant `tools/cot_release.py` computes from the CFTC's own schedules (checked against
+every published 2025-2026 date in `tests/test_cot_release.py`). An earlier version stamped every
+report on its Friday, which during the 2025 shutdown made reports visible weeks before release.
 
 Usage:
     curl -s 'https://publicreporting.cftc.gov/resource/6dca-aqww.json?\\
@@ -22,9 +20,11 @@ import datetime as dt
 import json
 import sys
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
-PUBLISH_UTC_HOUR = 20
-PUBLISH_UTC_MINUTE = 30
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.cot_release import release_instant_ms  # noqa: E402
 
 _FIELDS = {
     "open_interest": "open_interest_all",
@@ -33,11 +33,6 @@ _FIELDS = {
     "comm_long": "comm_positions_long_all",
     "comm_short": "comm_positions_short_all",
 }
-
-
-def next_friday(day: dt.date) -> dt.date:
-    days_ahead = (4 - day.weekday()) % 7
-    return day + dt.timedelta(days=days_ahead or 7)
 
 
 def _number(raw: object) -> str | None:
@@ -57,15 +52,12 @@ def main(path: str, since: str, scope: str) -> int:
         day = dt.date.fromisoformat(row["report_date_as_yyyy_mm_dd"][:10])
         if day < floor:
             continue
-        published = next_friday(day)
-        known_at = dt.datetime.combine(
-            published, dt.time(PUBLISH_UTC_HOUR, PUBLISH_UTC_MINUTE), tzinfo=dt.UTC
-        )
+        known_at_ms = release_instant_ms(day)
         period_start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
         record = {
             "scope": scope,
             "effective_at": int(period_start.timestamp() * 1000),
-            "known_at": int(known_at.timestamp() * 1000),
+            "known_at": known_at_ms,
             "period_start": int(period_start.timestamp() * 1000),
             "availability": "derived",
             "fields": {dst: _number(row.get(src)) for dst, src in _FIELDS.items()},

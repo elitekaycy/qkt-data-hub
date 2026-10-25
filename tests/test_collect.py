@@ -194,6 +194,12 @@ class DeclarativeCalendarTest(unittest.TestCase):
         blob = RawBlob(body=json.dumps([old] + rows).encode(), content_type="application/json", fetched_at=1)
         self.assertEqual(len(self.source.parse(blob)), len(self.candidates))
 
+    def test_a_declared_since_skips_rows_before_the_datasets_coverage(self) -> None:
+        collector = dict(self.schema.raw["collector"], since="2030-01-01")
+        self.assertEqual(DeclarativeSource("cal.high_impact", collector).parse(self.blob), [])
+        with self.assertRaises(ConfigError):
+            DeclarativeSource("cal.high_impact", dict(collector, since="soon"))
+
     def test_an_unfilled_actual_is_none_not_zero(self) -> None:
         # A pre-release row has no `actual` key at all. Turning that into 0 would invent a
         # surprise of exactly minus the forecast on every upcoming release.
