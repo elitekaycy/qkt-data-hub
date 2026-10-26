@@ -44,6 +44,23 @@ def list_day_files(root: Path, dataset: str) -> list[Path]:
     return sorted((p for p in directory.iterdir() if p.suffix == ".ndjson"), key=lambda p: p.name)
 
 
+def read_day_file(path: Path) -> list[Record]:
+    """Every record in one day file, in file order.
+
+    Raises on a malformed line, for the reason `read_range` does.
+    """
+    out: list[Record] = []
+    text = Path(path).read_text(encoding="utf-8")
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        if not line:
+            continue
+        try:
+            out.append(Record.from_json(line))
+        except RecordError as e:
+            raise StoreError(f"{path}:{lineno}: malformed journal record: {e}") from e
+    return out
+
+
 def read_range(root: Path, dataset: str, known_from: int, known_to: int) -> list[Record]:
     """Every record of `dataset` with `known_from <= known_at <= known_to`, in `sort_key` order.
 
@@ -57,16 +74,7 @@ def read_range(root: Path, dataset: str, known_from: int, known_to: int) -> list
     for path in list_day_files(root, dataset):
         if path.stem < from_day or path.stem > to_day:
             continue
-        text = path.read_text(encoding="utf-8")
-        for lineno, line in enumerate(text.split("\n"), start=1):
-            if not line:
-                continue
-            try:
-                record = Record.from_json(line)
-            except RecordError as e:
-                raise StoreError(f"{path}:{lineno}: malformed journal record: {e}") from e
-            if known_from <= record.known_at <= known_to:
-                out.append(record)
+        out.extend(r for r in read_day_file(path) if known_from <= r.known_at <= known_to)
     out.sort(key=sort_key)
     return out
 

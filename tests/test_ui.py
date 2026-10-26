@@ -14,11 +14,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from hub import ui
 from hub.__main__ import main
 from hub.compiler import compile_all
 from hub.journal import JournalWriter
 from hub.registry import Registry
-from hub.ui import make_handler, state
+from hub.ui import make_handler, records, series, state
 from hubread.policy import Policy
 from hubread.record import Availability, Record
 
@@ -88,6 +89,71 @@ class UiTest(unittest.TestCase):
             httpd.shutdown()
             httpd.server_close()
         self.assertEqual(self._files(), before)
+
+    def _backfill_old_days(self):
+        # A backfill journals old days after the live ones, so the newest `seq` is in the oldest file.
+        writer = JournalWriter(self.root)
+        for i in range(3):
+            known = 1_600_000_000_000 + i * 86_400_000
+            writer.append(_record(known, known + 1))
+        writer.close()
+
+    def test_records_are_the_highest_seq_wherever_the_backfill_put_them(self):
+        self._backfill_old_days()
+        got = [r["seq"] for r in records(self.root, "cal.us_test", 3)]
+        self.assertEqual(got, [5, 4, 3])
+        self.assertEqual([r["seq"] for r in records(self.root, "cal.us_test", 50)], [5, 4, 3, 2, 1])
+
+    def test_series_is_the_newest_by_known_at_and_reads_only_the_files_it_needs(self):
+        self._backfill_old_days()
+        with mock.patch("hub.ui.read_day_file", wraps=ui.read_day_file) as read:
+            got = series(self.root, "cal.us_test", "USD", "at", limit=2)
+        self.assertEqual([row[0] for row in got], [1_704_067_200_000, 1_706_727_660_000])
+        self.assertEqual(read.call_count, 2)  # the two newest day files; none of the backfilled ones
+
+    def test_state_reads_a_day_file_again_only_when_it_has_changed(self):
+        state(self.root, self.registry, Policy())
+        with mock.patch("hub.ui.read_day_file", wraps=ui.read_day_file) as read:
+            state(self.root, self.registry, Policy())
+            self.assertEqual(read.call_count, 0)
+            writer = JournalWriter(self.root)
+            writer.append(_record(1_706_727_670_000, 1_712_000_000_000))  # same day as the second record
+            writer.close()
+            doc = state(self.root, self.registry, Policy())
+            self.assertEqual(read.call_count, 1)
+        journal = doc["datasets"][0]["journal"]
+        self.assertEqual(journal["records"], 3)
+        self.assertEqual(journal["last_seq"], 3)
+        self.assertEqual(journal["last_known_at"], 1_706_727_670_000)
+
+    def test_polls_that_overlap_are_answered_one_at_a_time(self):
+        # The page polls every ten seconds; a slower read used to start another thread on every
+        # poll, and they piled up holding the GIL and memory beside the collector.
+        active, peak, lock = [0], [0], threading.Lock()
+
+        def slow_state(*_a):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            threading.Event().wait(0.2)
+            with lock:
+                active[0] -= 1
+            return {"datasets": []}
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.root, self.registry, Policy()))
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{httpd.server_address[1]}/api/state"
+        try:
+            with mock.patch("hub.ui.state", slow_state):
+                polls = [threading.Thread(target=lambda: urllib.request.urlopen(url).read()) for _ in range(4)]
+                for t in polls:
+                    t.start()
+                for t in polls:
+                    t.join()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        self.assertEqual(peak[0], 1)
 
     def test_run_serves_the_view_from_the_daemons_own_process(self):
         # One container runs the whole hub: `run --ui-port` serves the view while the collector

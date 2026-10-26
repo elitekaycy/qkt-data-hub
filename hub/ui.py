@@ -16,6 +16,7 @@ import json
 import threading
 import time
 from collections import Counter
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -23,13 +24,51 @@ from urllib.parse import parse_qs, urlparse
 
 from hub import status
 from hub.registry import Registry
-from hubread.journal import list_day_files, read_range
+from hubread.journal import list_day_files, read_day_file
 from hubread.policy import Policy
 from hubread.reader import Reader
 
 _PAGE = Path(__file__).with_name("ui.html")
 _FAR_FUTURE_MS = 4_102_444_800_000
 _RECENT_DAYS = 60
+# One store read at a time. The page polls every ten seconds, and a full read of a large journal
+# (GDELT's hourly history is hundreds of thousands of records) can take longer than that: without
+# this, polls stacked up in threads, held the GIL and gigabytes, and starved the collector beside them.
+_READ_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True)
+class _DayStats:
+    records: int
+    first_known_at: int | None
+    last_known_at: int | None
+    last_seq: int | None
+    scopes: frozenset[str]
+    availability: Counter[str]
+
+
+# Per day file, keyed by (size, mtime): the journal is append-only, so a file that has not changed
+# needs reading once per process, and a poll re-reads only the day being written.
+_DAY_STATS: dict[Path, tuple[tuple[int, int], _DayStats]] = {}
+
+
+def _day_stats(path: Path) -> _DayStats:
+    st = path.stat()
+    stamp = (st.st_size, st.st_mtime_ns)
+    cached = _DAY_STATS.get(path)
+    if cached and cached[0] == stamp:
+        return cached[1]
+    rows = read_day_file(path)
+    stats = _DayStats(
+        records=len(rows),
+        first_known_at=min((r.known_at for r in rows), default=None),
+        last_known_at=max((r.known_at for r in rows), default=None),
+        last_seq=max((r.seq for r in rows), default=None),
+        scopes=frozenset(r.scope for r in rows),
+        availability=Counter(str(r.availability) for r in rows),
+    )
+    _DAY_STATS[path] = (stamp, stats)
+    return stats
 
 
 def _now_ms() -> int:
@@ -86,12 +125,17 @@ def state(root: Path, registry: Registry, policy: Policy) -> dict[str, Any]:
     reader = Reader(root, policy)
     manifest = reader._manifest  # the manifest is the reader's to parse; the view reuses it
     collect = status.read(root, "collect")
-    since = now - _RECENT_DAYS * 86_400_000
+    since_day = _day(now - (_RECENT_DAYS - 1) * 86_400_000)
     datasets = []
     for name in registry.datasets():
         schema = registry.schema(name)
-        records = read_range(root, name, 0, _FAR_FUTURE_MS)
-        per_day: Counter[str] = Counter(_day(r.known_at) for r in records if r.known_at >= since)
+        files = list_day_files(root, name)
+        days = [(p.stem, _day_stats(p)) for p in files]
+        stats = [d for _, d in days]
+        filled = [d for d in stats if d.records]  # an empty day file has no known_at or seq
+        availability: Counter[str] = Counter()
+        for d in stats:
+            availability.update(d.availability)
         info = manifest.get(name)
         datasets.append(
             {
@@ -104,14 +148,15 @@ def state(root: Path, registry: Registry, policy: Policy) -> dict[str, Any]:
                 ],
                 "collector": _collector_view(schema.raw.get("collector")),
                 "journal": {
-                    "records": len(records),
-                    "day_files": len(list_day_files(root, name)),
-                    "first_known_at": min((r.known_at for r in records), default=None),
-                    "last_known_at": max((r.known_at for r in records), default=None),
-                    "last_seq": max((r.seq for r in records), default=None),
-                    "scopes": sorted({r.scope for r in records}),
-                    "availability": dict(Counter(str(r.availability) for r in records)),
-                    "per_day": dict(sorted(per_day.items())),
+                    "records": sum(d.records for d in stats),
+                    "day_files": len(files),
+                    "first_known_at": min((d.first_known_at for d in filled), default=None),
+                    "last_known_at": max((d.last_known_at for d in filled), default=None),
+                    "last_seq": max((d.last_seq for d in filled), default=None),
+                    "scopes": sorted(set().union(*(d.scopes for d in stats))),
+                    "availability": dict(availability),
+                    # Records per UTC day over the last `_RECENT_DAYS` days, today included.
+                    "per_day": {day: d.records for day, d in days if day >= since_day and d.records},
                 },
                 "manifest": {
                     "windows": len(info.windows) if info else 0,
@@ -150,12 +195,31 @@ def _record_view(record: Any) -> dict[str, Any]:
 
 
 def records(root: Path, dataset: str, limit: int) -> list[dict[str, Any]]:
-    rows = sorted(read_range(root, dataset, 0, _FAR_FUTURE_MS), key=lambda r: r.seq, reverse=True)
+    """The `limit` most recently journalled records (highest `seq`), reading only the files that hold them.
+
+    Day files are dated by `known_at`, not `seq` (a backfill writes old days last), so files are
+    taken by their highest `seq` until no unread file can beat the `limit`-th record found.
+    """
+    files = sorted(
+        ((d.last_seq, p) for p in list_day_files(root, dataset) for d in [_day_stats(p)] if d.last_seq is not None),
+        reverse=True,
+    )
+    rows: list[Any] = []
+    for last_seq, path in files:
+        if len(rows) >= limit and last_seq < rows[limit - 1].seq:
+            break
+        rows.extend(read_day_file(path))
+        rows.sort(key=lambda r: r.seq, reverse=True)
     return [_record_view(r) for r in rows[:limit]]
 
 
 def series(root: Path, dataset: str, scope: str, field: str, limit: int = 5000) -> list[list[Any]]:
-    rows = [r for r in read_range(root, dataset, 0, _FAR_FUTURE_MS) if r.scope == scope and field in r.fields]
+    """The last `limit` values of one field in one scope by `known_at`, reading newest day files first."""
+    rows: list[Any] = []
+    for path in reversed(list_day_files(root, dataset)):
+        if len(rows) >= limit:
+            break  # every record in an older file is known earlier than all `limit` already found
+        rows.extend(r for r in read_day_file(path) if r.scope == scope and field in r.fields)
     rows.sort(key=lambda r: (r.known_at, r.seq))
     out = []
     for r in rows[-limit:]:
@@ -203,20 +267,27 @@ def make_handler(root: Path, registry: Registry, policy: Policy) -> type[BaseHTT
             try:
                 if url.path in ("/", "/index.html"):
                     self._send(200, _PAGE.read_bytes(), "text/html; charset=utf-8")
-                elif url.path == "/api/state":
-                    self._json(state(root, registry, policy))
-                elif url.path == "/api/records":
-                    self._json(records(root, q["dataset"], min(int(q.get("limit", "50")), 500)))
-                elif url.path == "/api/series":
-                    self._json(series(root, q["dataset"], q["scope"], q["field"]))
-                elif url.path == "/api/as-of":
-                    self._json(as_of(root, policy, q["dataset"], q["scope"], _parse_instant(q["at"])))
-                else:
-                    self._json({"error": "not found"}, 404)
+                    return
+                with _READ_LOCK:
+                    doc = self._answer(url.path, q)
+                self._json(*doc)
+            except (BrokenPipeError, ConnectionResetError):
+                return  # the viewer left before the answer; nothing to tell it
             except KeyError as e:
                 self._json({"error": f"missing parameter {e}"}, 400)
             except (ValueError, OSError) as e:
                 self._json({"error": str(e)}, 400)
+
+        def _answer(self, path: str, q: dict[str, str]) -> tuple[Any, int]:
+            if path == "/api/state":
+                return state(root, registry, policy), 200
+            if path == "/api/records":
+                return records(root, q["dataset"], min(int(q.get("limit", "50")), 500)), 200
+            if path == "/api/series":
+                return series(root, q["dataset"], q["scope"], q["field"]), 200
+            if path == "/api/as-of":
+                return as_of(root, policy, q["dataset"], q["scope"], _parse_instant(q["at"])), 200
+            return {"error": "not found"}, 404
 
     return Handler
 
