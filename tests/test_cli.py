@@ -16,8 +16,10 @@ import threading
 import unittest
 from contextlib import redirect_stdout
 from typing import Any
+from unittest import mock
 
 from hub.__main__ import EXIT_DATA, EXIT_OK, main
+from hub.collectors.declarative import Cadence
 from hub.config import HubConfig
 from hub.registry import Registry
 from hub.scheduler import Scheduler
@@ -173,6 +175,38 @@ class SchedulerCadenceTest(unittest.TestCase):
         state = scheduler._state["cal.high_impact"]
         state.events = ()
         self.assertEqual(scheduler._interval_for("cal.high_impact", state), 1800.0)
+
+    def test_a_steady_cadence_never_reads_the_journal_for_upcoming_events(self) -> None:
+        # Only the near-event tightening uses them, and the read is the dataset's whole history:
+        # for GDELT's hourly journal, minutes of every five-minute poll.
+        scheduler = Scheduler(self.config, self.registry, clock=lambda: 1_789_000_000.0, sleep=lambda _s: None)
+        steady = mock.Mock(cadence=Cadence(steady_seconds=300.0))
+        with mock.patch.object(self.registry, "source", return_value=steady), \
+                mock.patch("hub.scheduler.read_range", side_effect=AssertionError("journal read")):
+            self.assertEqual(scheduler._known_events("cal.high_impact"), ())
+
+    def test_the_heartbeat_is_this_process_s_from_the_start_and_after_each_collector(self) -> None:
+        # A first pass collects every dataset before it compiles; the heartbeat used to be written
+        # only after both, so a restart read as a dead writer for as long as the pass took.
+        (self.datasets / "cal.second.yaml").write_text((self.datasets / "cal.high_impact.yaml").read_text()
+                                                        .replace("dataset: cal.high_impact", "dataset: cal.second"))
+        registry = Registry.load(self.datasets)
+        heartbeat = self.config.root / "heartbeat"
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text("1")  # the previous process's
+        now = [1_789_000_000.0]
+        seen = []
+
+        def collect(_root, _registry, name, **_kw):
+            seen.append((name, int(heartbeat.read_text())))
+            now[0] += 120.0
+            return 0
+
+        scheduler = Scheduler(self.config, registry, clock=lambda: now[0], sleep=lambda _s: None)
+        with mock.patch("hub.__main__.collect_once", collect), mock.patch("hub.scheduler.compile_all"):
+            scheduler.run(once=True)
+        self.assertEqual(seen, [("cal.high_impact", 1_789_000_000_000), ("cal.second", 1_789_000_120_000)])
+        self.assertEqual(int(heartbeat.read_text()), 1_789_000_240_000)
 
 
 if __name__ == "__main__":

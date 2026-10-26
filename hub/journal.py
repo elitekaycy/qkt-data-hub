@@ -9,12 +9,13 @@ values and corrupt the ordering the whole product rests on.
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 from collections import OrderedDict
 from pathlib import Path
 from types import TracebackType
 
-from hub.errors import RecordError, StoreError
+from hub.errors import StoreError
 from hub.record import Record, canonical_json
 from hubread.journal import day_str, journal_path, list_day_files
 
@@ -120,24 +121,30 @@ class JournalWriter:
         return self._seq[dataset] + 1
 
     def _resume_seq(self, dataset: str) -> int:
-        """The last `seq` already on disk for `dataset`, so a restarted writer does not
-        restart numbering at 1 and collide with what a reader has already seen.
+        """The highest `seq` already on disk for `dataset`, so this writer numbers above every
+        record a reader has seen.
 
-        Reads only the newest day file's lines, not the whole dataset history. By the time
-        this runs, `_repair_torn_tails` has already truncated any unterminated trailing line,
-        so the newest file's last line is either absent or a complete, parseable record.
+        Every day file, not just the newest: a backfill appends to old days, so after one the
+        highest `seq` sits in an old file. Resuming from the newest file's tail (what this did)
+        restarted each backfill run's numbering at the live tail, and the live collector after it
+        numbered below the backfill: a live tail, which delivers only `seq` above the highest it
+        has seen, then dropped every new record until the count caught up (on the production
+        store in 2026-10: a month of GDELT, years of funding and Fear & Greed). Every line, not
+        just each file's last: a file touched by two such runs is not in `seq` order. By the time
+        this runs `_repair_torn_tails` has truncated any unterminated line.
         """
-        days = list_day_files(self.root, dataset)
-        if not days:
-            return 0
-        newest = days[-1]
-        lines = [ln for ln in newest.read_text(encoding="utf-8").split("\n") if ln]
-        if not lines:
-            return 0
-        try:
-            return Record.from_json(lines[-1]).seq
-        except RecordError as e:
-            raise StoreError(f"{newest}: cannot resume seq, malformed tail") from e
+        top = 0
+        for path in list_day_files(self.root, dataset):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
+                if not line:
+                    continue
+                try:
+                    seq = json.loads(line)["seq"]
+                except (ValueError, KeyError) as e:
+                    raise StoreError(f"{path}:{lineno}: cannot resume seq, malformed record") from e
+                if seq > top:
+                    top = seq
+        return top
 
     def _repair_torn_tails(self) -> None:
         """Truncate every dataset's journal files back to their last complete line.

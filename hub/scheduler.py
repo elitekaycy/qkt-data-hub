@@ -68,6 +68,9 @@ class Scheduler:
         we recorded: knowing on Monday that a release lands Friday is not look-ahead, and it is
         what lets the poller be awake at the moment the number appears.
         """
+        cadence: Cadence | None = getattr(self._registry.source(dataset), "cadence", None)
+        if cadence is None or cadence.near_every_seconds <= 0:
+            return ()  # only a near-event cadence uses them, and the read is the whole journal
         now_ms = int(self._clock() * 1000)
         try:
             records = read_range(self._config.root, dataset, 0, 4_102_444_800_000)
@@ -136,6 +139,9 @@ class Scheduler:
                     if state.consecutive_failures >= self._config.failures_before_alert and not state.alerted:
                         state.alerted = True
                         log(f"ALERT collect[{name}] has failed {state.consecutive_failures} times in a row")
+                # A first pass over every dataset takes minutes; beating only after it read as a
+                # dead writer for the whole of it.
+                self._beat()
         finally:
             writer.close()
         return written
@@ -143,6 +149,7 @@ class Scheduler:
     def run(self, *, once: bool = False) -> int:
         """Poll, compile and beat until interrupted. `once` does a single pass, for CI and smoke."""
         log(f"hub starting: root={self._config.root} datasets={self._registry.datasets()}")
+        self._beat()  # the previous process's beat is not this one's
         if self._config.compile_on_start or once:
             self._next_compile = 0.0
         while True:
