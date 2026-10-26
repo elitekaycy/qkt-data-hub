@@ -159,6 +159,45 @@ class CompilerTest(unittest.TestCase):
         self.assertEqual([r.sha256 for r in once], [r.sha256 for r in each])
         self.assertEqual([r.records for r in once], [r.records for r in each])
 
+    def _registry(self):
+        return _StubRegistry(self.schema)
+
+    def _hashes(self):
+        manifest = compile_all(self.root, self._registry())
+        return {w.from_day: w.sha256 for w in manifest.datasets[self.schema.name].windows}
+
+    def test_an_incremental_compile_rewrites_only_what_new_records_touch(self):
+        for month in (6, 7):
+            self._write("USD", ms(2026, month, 3), actual="1", forecast=str(month))
+        self._hashes()
+        june = next((self.root / "snapshot").rglob("2026-06-01_*.qkh"))
+        before = june.stat().st_mtime_ns
+        self._write("USD", ms(2026, 8, 3), actual="1", forecast="8")
+        incremental = self._hashes()
+        self.assertEqual(june.stat().st_mtime_ns, before, "June had no new record and was not rewritten")
+        # Exactly what a compile from nothing gives.
+        for path in (self.root / "snapshot").rglob("*.qkh"):
+            path.unlink()
+        (self.root / "manifest.json").unlink()
+        self.assertEqual(incremental, self._hashes())
+
+    def test_a_replaced_journal_or_a_missing_snapshot_is_recompiled(self):
+        for month in (6, 7):
+            self._write("USD", ms(2026, month, 3), actual="1", forecast=str(month))
+        first = self._hashes()
+        next((self.root / "snapshot").rglob("2026-06-01_*.qkh")).unlink()
+        self.assertEqual(self._hashes(), first)
+        self.assertTrue(any((self.root / "snapshot").rglob("2026-06-01_*.qkh")))
+        # Move the journal aside and write a different history with lower seq numbers.
+        journal = self.root / "journal" / self.schema.name
+        for path in journal.glob("*.ndjson"):
+            path.unlink()
+        self._history.clear()
+        self._write("USD", ms(2026, 6, 3), actual="1", forecast="9")
+        replaced = self._hashes()
+        self.assertNotEqual(replaced["2026-06-01"], first["2026-06-01"])
+        self.assertNotIn("2026-07-01", replaced)
+
     # -- manifest ----------------------------------------------------------------------------
 
     def test_manifest_records_coverage_and_hashes(self):

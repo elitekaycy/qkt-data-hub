@@ -238,7 +238,8 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
 
     Idempotent: recompiling with an unchanged journal reproduces the same per-window hashes, so
     running this repeatedly (a scheduled job, a manual rebuild) never perturbs a hash a backtest
-    has already cited.
+    has already cited. Windows no new record touched are kept rather than rewritten
+    (`_unchanged_windows`); whenever anything is recompiled, the dataset's whole history is verified.
     """
     root = Path(root)
     manifest = Manifest.load(root)
@@ -249,8 +250,13 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
         if not windows:
             continue
 
-        entries = [
-            WindowEntry(
+        all_records = read_range(root, name, MIN_TIMESTAMP_MS, MAX_TIMESTAMP_MS)
+        last_seq = max((r.seq for r in all_records), default=0)
+        last_known_at = max((r.known_at for r in all_records), default=None)
+
+        reused = _unchanged_windows(root, schema, manifest.datasets.get(name), all_records, windows)
+        compiled = {
+            result.from_day[:7]: WindowEntry(
                 from_day=result.from_day,
                 to_day=result.to_day,
                 file=str(result.path.relative_to(root)),
@@ -258,12 +264,9 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
                 records=result.records,
                 raw_deps=result.raw_deps,
             )
-            for result in compile_windows(root, schema, windows)
-        ]
-
-        all_records = read_range(root, name, MIN_TIMESTAMP_MS, MAX_TIMESTAMP_MS)
-        last_seq = max((r.seq for r in all_records), default=0)
-        last_known_at = max((r.known_at for r in all_records), default=None)
+            for result in compile_windows(root, schema, [w for w in windows if w not in reused])
+        }
+        entries = [reused.get(w) or compiled[w] for w in windows]
 
         manifest.datasets[name] = DatasetManifest(
             schema_hash=schema.hash(),
@@ -284,6 +287,48 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
          "windows": sum(len(e.windows) for e in manifest.datasets.values())},
     )
     return manifest
+
+
+def _unchanged_windows(
+    root: Path,
+    schema: DatasetSchema,
+    previous: DatasetManifest | None,
+    records: Sequence[Record],
+    windows: Sequence[str],
+) -> dict[str, WindowEntry]:
+    """The manifest entries a compile can keep as they are, by window.
+
+    The journal is append-only, so a window can only change when a record lands in it, and every
+    new record has a higher `seq` than the manifest last saw. A window before the first month any
+    new record lands in, with the same schema, the same record count and its snapshot on disk,
+    would compile to the same bytes; recompiling it on every cycle is what made the daemon's
+    compile grow with the whole history. `verify` still recompiles everything.
+    """
+    if previous is None or previous.schema_hash != schema.hash():
+        return {}
+    last_seq = max((r.seq for r in records), default=0)
+    if last_seq < previous.last_seq:
+        return {}  # the journal was replaced, not appended to
+    first_changed = min((_window_of(r.known_at) for r in records if r.seq > previous.last_seq), default=None)
+    counts: dict[str, int] = {}
+    for r in records:
+        month = _window_of(r.known_at)
+        counts[month] = counts.get(month, 0) + 1
+    kept: dict[str, WindowEntry] = {}
+    for entry in previous.windows:
+        month = entry.from_day[:7]
+        if (
+            month in windows
+            and (first_changed is None or month < first_changed)
+            and counts.get(month, 0) == entry.records
+            and (root / entry.file).is_file()
+        ):
+            kept[month] = entry
+    return kept
+
+
+def _window_of(known_at: int) -> str:
+    return datetime.fromtimestamp(known_at / 1000, UTC).strftime("%Y-%m")
 
 
 def verify(root: Path | str, registry: object | None = None) -> list[str]:
