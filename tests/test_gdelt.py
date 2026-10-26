@@ -72,12 +72,35 @@ class GdeltTest(unittest.TestCase):
         direct = gdelt.hour_candidates(HOUR_END, {s: (None if b is None else b[1]) for s, b in batches.items()})
         self.assertEqual(gdelt.hour_candidates(hour, expanded), direct)
 
+    def test_live_waits_for_a_missing_batch_until_the_gap_is_final(self):
+        events_csv = FIXTURE.read_bytes()
+        now = [HOUR_END / 1000 + 6 * 60]
+        source = GdeltEventsSource("text.gdelt.events", clock=lambda: now[0])
+        served = {"late": False}
+
+        def download(stamp, timeout):
+            if stamp == HOUR_END and not served["late"]:
+                return None
+            return ("md5", events_csv)
+
+        with mock.patch.object(gdelt, "download_batch", download):
+            self.assertIsNone(source.fetch(5.0), "a missing batch 6 minutes after the hour is retried, not recorded")
+            served["late"] = True
+            blob = source.fetch(5.0)
+            self.assertEqual({c.fields["batches"] for c in source.parse(blob)}, {"4"})
+        # A batch still missing 45 minutes after the hour is a gap at the source.
+        now[0] = HOUR_END / 1000 + 50 * 60
+        source = GdeltEventsSource("text.gdelt.events", clock=lambda: now[0])
+        gone = lambda stamp, t: None if stamp == HOUR_END else ("m", events_csv)  # noqa: E731
+        with mock.patch.object(gdelt, "download_batch", gone):
+            self.assertEqual({c.fields["batches"] for c in source.parse(source.fetch(5.0))}, {"3"})
+
     def test_live_fetches_the_newest_hour_past_the_lag_once(self):
         events, _ = gdelt.parse_export(FIXTURE.read_bytes())
         clock = HOUR_END / 1000 + 4 * 60  # 01:04: the 01:00 hour is not past its lag yet
         source = GdeltEventsSource("text.gdelt.events", clock=lambda: clock)
         self.assertEqual(source.latest_hour_end(), HOUR_END - gdelt.HOUR_MS)
-        clock = HOUR_END / 1000 + 6 * 60
+        clock = HOUR_END / 1000 + 50 * 60
         source = GdeltEventsSource("text.gdelt.events", clock=lambda: clock)
         calls = []
 

@@ -48,6 +48,10 @@ BASE_URL = "https://data.gdeltproject.org/gdeltv2/"
 BATCH_MS = 15 * 60 * 1000
 HOUR_MS = 60 * 60 * 1000
 PUBLISH_LAG_MS = 5 * 60 * 1000
+# A batch GDELT has announced is not always downloadable yet (seen: the 02:00 batch of 2026-10-26
+# answered 404 twenty minutes after `lastupdate.txt` named it). Live collection holds back an hour
+# with a missing batch until this old, then records the gap.
+GAP_FINAL_MS = 45 * 60 * 1000
 _EIGHT = Decimal("0.00000001")
 
 # FIPS 10-4 country codes, as GDELT writes ActionGeo_CountryCode.
@@ -244,7 +248,11 @@ def download_batch(stamp_ms: int, timeout_seconds: float) -> tuple[str, bytes] |
 
 
 class GdeltEventsSource:
-    """Live half: every poll fetches the newest hour that is complete and past its publication lag."""
+    """Live half: every poll fetches the newest hour that is complete and past its publication lag.
+
+    An hour missing a batch is retried on each poll until it is `GAP_FINAL_MS` old and only then
+    recorded with the gap, so a batch the CDN serves late is not mistaken for one GDELT never made.
+    """
 
     def __init__(self, dataset: str, *, clock: Callable[[], float] = time.time) -> None:
         self._dataset = dataset
@@ -286,6 +294,10 @@ class GdeltEventsSource:
                 batches[stamp] = None if got is None else (got[0], parse_export(got[1])[0])
         except (OSError, zipfile.BadZipFile, ValueError) as e:
             log(f"collect[{self._dataset}] gdelt fetch failed: {e}")
+            return None
+        missing = [stamp_text(s) for s, b in batches.items() if b is None]
+        if missing and int(self._clock() * 1000) - hour_end < GAP_FINAL_MS:
+            log(f"collect[{self._dataset}] hour {stamp_text(hour_end)} waiting for {missing}")
             return None
         self._last = RawBlob(
             body=compact(hour_end, batches),
