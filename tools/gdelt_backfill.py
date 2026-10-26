@@ -7,8 +7,8 @@ is one the list names but GDELT answers 404 for (seen: 2015-04-04 11:30), record
 `<month>.source_gaps`. Any other failure to read a listed batch fails its month, which is then not
 marked done, so a rerun picks it up rather than recording a gap that is not GDELT's.
 
-Records are stamped `derived`, visible `PUBLISH_LAG_MS` after their hour ends, the instant the
-live collector first could publish them.
+Records are stamped `derived`, visible `BACKFILL_KNOWN_LAG_MS` after their hour ends: later than
+the live collector has ever published an hour, since when each file was first served is not known.
 
 Usage:
     python3 tools/gdelt_backfill.py --out /var/tmp/gdelt-backfill --since 2015-03 --until 2026-10
@@ -110,7 +110,7 @@ def hour_rows(
                 "effective_at": c.effective_at,
                 "period_start": c.period_start,
                 "period_end": c.period_end,
-                "known_at": hour_end + gdelt.PUBLISH_LAG_MS,
+                "known_at": hour_end + gdelt.BACKFILL_KNOWN_LAG_MS,
                 "availability": "derived",
                 "fields": c.fields,
             }
@@ -130,7 +130,7 @@ def run_month(month: str, out: Path, master: dict[int, tuple[str, str]], workers
     done = out / f"{month}.done"
     if done.exists():
         return True
-    hours = [h for h in month_hours(month) if h + gdelt.PUBLISH_LAG_MS <= now_ms]
+    hours = [h for h in month_hours(month) if h + gdelt.BACKFILL_KNOWN_LAG_MS <= now_ms]
     failures: list[str] = []
     gaps: list[str] = []
 

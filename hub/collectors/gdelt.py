@@ -7,11 +7,13 @@ headlines, so this collector turns each hour into numbers per region: how much w
 much of it was conflict, threats, protests, sanctions or violence, and how the coverage read.
 
 Timing. An hour's record covers the four export batches stamped in it (:15, :30, :45 and :00 at
-its end, the batch stamp being GDELT's `DATEADDED`), and becomes visible `PUBLISH_LAG_MS` after
-the hour ends. GDELT posts a batch before the time it is stamped with (measured on bot2:
-`/var/tmp/gdelt-lag`), so the lag only adds margin. Live collection and the backfill
-(`tools/gdelt_backfill.py`) share every function here, so both produce the same numbers and the
-same instants.
+its end, the batch stamp being GDELT's `DATEADDED`). GDELT announces a batch in `lastupdate.txt`
+about ten minutes before its stamp, but its file can answer 404 for half an hour or more after
+that (measured on bot2, `/var/tmp/gdelt-lag`), so a live hour is complete 38-47 minutes after it
+ends and is stamped with the instant it was written. The backfill cannot know when each file was
+first served and stamps every hour `BACKFILL_KNOWN_LAG_MS` after its end, later than any live hour
+seen. Live collection and the backfill (`tools/gdelt_backfill.py`) share every function here, so
+both produce the same numbers.
 
 Integrity. A batch GDELT never published is counted in `batches` (0-4), never treated as a quiet
 quarter-hour; an hour with no batch at all has no record. Events are counted once per hour by
@@ -48,6 +50,9 @@ BASE_URL = "https://data.gdeltproject.org/gdeltv2/"
 BATCH_MS = 15 * 60 * 1000
 HOUR_MS = 60 * 60 * 1000
 PUBLISH_LAG_MS = 5 * 60 * 1000
+# When a backfilled hour counts as known: later than every live hour measured (38-47 min after its
+# end, 2026-10-26), so a backtest never sees an hour before the live collector could have.
+BACKFILL_KNOWN_LAG_MS = 90 * 60 * 1000
 # A batch GDELT has announced is not always downloadable yet (seen: the 02:00 batch of 2026-10-26
 # answered 404 twenty minutes after `lastupdate.txt` named it). Live collection holds back an hour
 # with a missing batch until this old, then records the gap.

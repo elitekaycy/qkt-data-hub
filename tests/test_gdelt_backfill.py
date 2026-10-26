@@ -31,7 +31,7 @@ class GdeltBackfillTest(unittest.TestCase):
         for scope, row in rows.items():
             self.assertEqual(row["fields"], live[scope].fields)
             self.assertEqual(row["fields"]["batches"], "3")
-            self.assertEqual(row["known_at"], HOUR_END + gdelt.PUBLISH_LAG_MS)
+            self.assertEqual(row["known_at"], HOUR_END + gdelt.BACKFILL_KNOWN_LAG_MS)
             self.assertEqual(row["availability"], "derived")
 
     def test_a_month_with_an_unreadable_listed_batch_is_not_marked_done(self):
@@ -43,17 +43,18 @@ class GdeltBackfillTest(unittest.TestCase):
             return FIXTURE.read_bytes()
 
         hours = [HOUR_END]
+        now = HOUR_END + gdelt.BACKFILL_KNOWN_LAG_MS
         with mock.patch.object(gdelt_backfill, "fetch", flaky), mock.patch.object(
             gdelt_backfill, "month_hours", lambda month: hours
         ):
-            ok = gdelt_backfill.run_month("2026-10", out, self.master, workers=2, now_ms=HOUR_END + 10 * 60_000)
+            ok = gdelt_backfill.run_month("2026-10", out, self.master, workers=2, now_ms=now)
         self.assertFalse(ok)
         self.assertFalse((out / "2026-10.done").exists())
         self.assertIn("20261026010000", (out / "2026-10.failures").read_text())
         with mock.patch.object(gdelt_backfill, "fetch", lambda url, md5: FIXTURE.read_bytes()), mock.patch.object(
             gdelt_backfill, "month_hours", lambda month: hours
         ):
-            done = gdelt_backfill.run_month("2026-10", out, self.master, workers=2, now_ms=HOUR_END + 10 * 60_000)
+            done = gdelt_backfill.run_month("2026-10", out, self.master, workers=2, now_ms=now)
         self.assertTrue(done)
         rows = [json.loads(line) for line in (out / "2026-10.ndjson").read_text().splitlines()]
         self.assertIn("GLOBAL", {r["scope"] for r in rows})
@@ -77,7 +78,7 @@ class GdeltBackfillTest(unittest.TestCase):
         self.assertEqual(hours[-1], int(dt.datetime(2026, 11, 1, tzinfo=dt.UTC).timestamp() * 1000))
         out = Path(tempfile.mkdtemp())
         with mock.patch.object(gdelt_backfill, "hour_rows", lambda h, m, g=None: [{"h": h}]):
-            gdelt_backfill.run_month("2026-10", out, {}, workers=2, now_ms=HOUR_END + 4 * 60_000)
+            gdelt_backfill.run_month("2026-10", out, {}, workers=2, now_ms=HOUR_END + gdelt.BACKFILL_KNOWN_LAG_MS - 1)
         written = [json.loads(line)["h"] for line in (out / "2026-10.ndjson").read_text().splitlines()]
         self.assertEqual(max(written), HOUR_END - gdelt.HOUR_MS)
 
