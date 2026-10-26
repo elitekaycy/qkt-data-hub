@@ -7,8 +7,13 @@ source once through the dataset's own declarative mapping, so the values are par
 live poll parses them, and writes them as backfill records stamped `derived` with an explicit
 availability rule: `known_at = effective_at + lag`.
 
+`--url` fetches a different address with the same mapping, for a source whose live URL asks
+for a short window but which serves its whole history on request (alternative.me `?limit=0`).
+
 Usage:
     python3 tools/declarative_backfill.py datasets/rates.crypto.btc_funding.yaml --lag 0s > /tmp/f.ndjson
+    python3 tools/declarative_backfill.py datasets/text.crypto.fear_greed.yaml --lag 1d \
+      --url 'https://api.alternative.me/fng/?limit=0' > /tmp/fng.ndjson
     python3 -m hub --root <store> backfill rates.crypto.btc_funding --file /tmp/f.ndjson --source binance
 """
 from __future__ import annotations
@@ -29,6 +34,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("dataset_file")
     ap.add_argument("--lag", required=True, help="how long after effective_at the value was knowable, e.g. 0s, 1h")
+    ap.add_argument("--url", help="fetch this address instead of the collector's own, with the same mapping")
     a = ap.parse_args()
     schema = load_schema(Path(a.dataset_file))
     collector = schema.raw.get("collector")
@@ -36,6 +42,8 @@ def main() -> int:
         print(f"{schema.name} has no declarative collector", file=sys.stderr)
         return 2
     lag_ms = int(duration_seconds(a.lag, "--lag") * 1000)
+    if a.url:
+        collector = dict(collector, url=a.url)
     blob = DeclarativeSource(schema.name, collector).fetch(30.0)
     if blob is None:
         print("source returned nothing usable", file=sys.stderr)

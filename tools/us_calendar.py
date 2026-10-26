@@ -8,10 +8,26 @@ from __future__ import annotations
 
 import datetime as dt
 
-# One-off federal closures declared by executive order or for a day of mourning.
+# One-off federal closures: executive orders, days of mourning and Washington-area emergency closures.
+# Counting a day as closed can only make a stamp later, never earlier, so a doubtful day is included.
 SPECIAL_CLOSURES = frozenset(
     dt.date.fromisoformat(d)
     for d in (
+        "2004-06-11",  # President Reagan, day of mourning
+        "2007-01-02",  # President Ford, day of mourning
+        "2007-12-24",
+        "2008-12-26",
+        "2010-02-08",  # Washington snowstorm closures
+        "2010-02-09",
+        "2010-02-10",
+        "2010-02-11",
+        "2012-10-29",  # Hurricane Sandy
+        "2012-10-30",
+        "2012-12-24",
+        "2014-12-26",
+        "2015-12-24",
+        "2016-01-25",  # Washington snowstorm closures
+        "2016-01-26",
         "2018-12-05",  # President George H. W. Bush, day of mourning
         "2018-12-24",
         "2019-12-24",
