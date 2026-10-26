@@ -134,6 +134,7 @@ class ScopeHistory:
     def __init__(self) -> None:
         self._order: list[tuple[int, str]] = []  # (effective_at, key), ascending
         self._fields: dict[str, dict[str, Any]] = {}
+        self._effective_at: dict[str, int] = {}  # key -> its slot's effective_at, to find the slot by bisection
 
     def upsert(self, effective_at: int, key: str, fields: dict[str, Any]) -> None:
         existing = self._position(key)
@@ -145,6 +146,7 @@ class ScopeHistory:
         else:
             bisect.insort(self._order, (effective_at, key))
         self._fields[key] = fields
+        self._effective_at[key] = effective_at
 
     def before(self, effective_at: int, key: str) -> list[dict[str, Any]]:
         """Every fact that precedes `(effective_at, key)` on the timeline, oldest first.
@@ -171,10 +173,10 @@ class ScopeHistory:
         return [self._fields[key] for _, key in self._order]
 
     def _position(self, key: str) -> int | None:
-        for i, (_, existing_key) in enumerate(self._order):
-            if existing_key == key:
-                return i
-        return None
+        effective_at = self._effective_at.get(key)
+        if effective_at is None:
+            return None
+        return bisect.bisect_left(self._order, (effective_at, key))
 
 
 def ingest(
