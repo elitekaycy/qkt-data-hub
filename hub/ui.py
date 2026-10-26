@@ -40,9 +40,9 @@ _READ_LOCK = threading.Lock()
 @dataclass(frozen=True)
 class _DayStats:
     records: int
-    first_known_at: int | None
-    last_known_at: int | None
-    last_seq: int | None
+    first_known_at: int  # all three meaningless when `records` is 0
+    last_known_at: int
+    last_seq: int
     scopes: frozenset[str]
     availability: Counter[str]
 
@@ -61,9 +61,9 @@ def _day_stats(path: Path) -> _DayStats:
     rows = read_day_file(path)
     stats = _DayStats(
         records=len(rows),
-        first_known_at=min((r.known_at for r in rows), default=None),
-        last_known_at=max((r.known_at for r in rows), default=None),
-        last_seq=max((r.seq for r in rows), default=None),
+        first_known_at=min((r.known_at for r in rows), default=0),
+        last_known_at=max((r.known_at for r in rows), default=0),
+        last_seq=max((r.seq for r in rows), default=0),
         scopes=frozenset(r.scope for r in rows),
         availability=Counter(str(r.availability) for r in rows),
     )
@@ -201,7 +201,7 @@ def records(root: Path, dataset: str, limit: int) -> list[dict[str, Any]]:
     taken by their highest `seq` until no unread file can beat the `limit`-th record found.
     """
     files = sorted(
-        ((d.last_seq, p) for p in list_day_files(root, dataset) for d in [_day_stats(p)] if d.last_seq is not None),
+        ((d.last_seq, p) for p in list_day_files(root, dataset) for d in [_day_stats(p)] if d.records),
         reverse=True,
     )
     rows: list[Any] = []
