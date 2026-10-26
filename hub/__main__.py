@@ -31,7 +31,7 @@ from hub.registry import Registry
 from hub.scheduler import Scheduler
 from hub.schema import DatasetSchema
 from hubread.errors import HubError
-from hubread.journal import read_range
+from hubread.journal import list_day_files, read_range
 from hubread.reader import Reader
 from hubread.record import Availability
 
@@ -83,6 +83,17 @@ def _history_for(root: Path, schema: DatasetSchema) -> tuple[RevisionIndex, dict
     return index, history
 
 
+# Dedupe and derivation state per dataset, kept between one process's polls. Rebuilding it reads the
+# dataset's whole journal: for GDELT's hourly history, three minutes of every five-minute poll.
+# `ingest` folds every record it returns into it and each of those is then appended, so it stays
+# equal to a rebuild -- unless something else wrote the dataset, which the files' fingerprint catches.
+_HISTORY: dict[tuple[str, str], tuple[tuple[tuple[str, int, int], ...], RevisionIndex, dict[str, ScopeHistory]]] = {}
+
+
+def _fingerprint(root: Path, dataset: str) -> tuple[tuple[str, int, int], ...]:
+    return tuple((p.name, st.st_size, st.st_mtime_ns) for p in list_day_files(root, dataset) for st in [p.stat()])
+
+
 def collect_once(
     root: Path,
     registry: Registry,
@@ -104,7 +115,12 @@ def collect_once(
         return 0
     raw_ref = RawStore(root).put(blob)
     candidates: list[Candidate] = source.parse(blob)
-    index, history = _history_for(root, schema)
+    cache_key = (str(root), schema.name)
+    cached = _HISTORY.pop(cache_key, None)  # dropped until this collect finishes cleanly
+    if cached is not None and cached[0] == _fingerprint(root, schema.name):
+        index, history = cached[1], cached[2]
+    else:
+        index, history = _history_for(root, schema)
     result = ingest(
         candidates,
         schema,
@@ -126,6 +142,7 @@ def collect_once(
     finally:
         if own_writer:
             handle.close()
+    _HISTORY[cache_key] = (_fingerprint(root, schema.name), index, history)
     log(
         f"collect[{dataset}] written={result.written} duplicates={result.duplicates} "
         f"revisions={result.revisions} quarantined={result.quarantined}"

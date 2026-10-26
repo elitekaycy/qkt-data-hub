@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.server
 import io
 import json
+import os
 import pathlib
 import shutil
 import tempfile
@@ -33,6 +34,7 @@ class _Feed:
 
     def __init__(self, body: bytes) -> None:
         self.calls = 0
+        self.body = body
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -40,9 +42,9 @@ class _Feed:
                 outer.calls += 1
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Length", str(len(outer.body)))
                 self.end_headers()
-                self.wfile.write(body)
+                self.wfile.write(outer.body)
 
             def log_message(self, *args: Any) -> None:
                 return
@@ -79,6 +81,37 @@ class CliTest(unittest.TestCase):
         with redirect_stdout(buffer):
             code = main(["--root", str(self.root), "--datasets", str(self.datasets), *argv])
         return code, buffer.getvalue()
+
+    def test_dedupe_state_kept_between_polls_equals_a_rebuild_and_an_outside_write_forces_one(self) -> None:
+        # Rebuilding it reads the dataset's whole journal, which for GDELT's hourly history took
+        # three minutes of every five-minute poll.
+        from hub import __main__ as cli
+
+        registry = Registry.load(self.datasets)
+        schema = registry.schema("cal.high_impact")
+        cli._HISTORY.clear()
+
+        def collect() -> int:
+            return cli.collect_once(self.root, registry, "cal.high_impact", timeout=5)
+
+        def state(index, history):
+            return index._state, {s: (h._order, h._fields) for s, h in history.items()}
+
+        self.assertGreater(collect(), 0)
+        rows = json.loads(FIXTURE.read_bytes())
+        row = next(r for r in rows if r["impact"] == "High" and r["forecast"])
+        row["forecast"] = "9" + row["forecast"]  # the provider revises a forecast
+        self.feed.body = json.dumps(rows).encode()
+        with mock.patch("hub.__main__._history_for", wraps=cli._history_for) as rebuild:
+            self.assertEqual(collect(), 1)
+            self.assertEqual(rebuild.call_count, 0)
+            _, kept_index, kept_history = cli._HISTORY[(str(self.root), "cal.high_impact")]
+            self.assertEqual(state(kept_index, kept_history), state(*cli._history_for(self.root, schema)))
+            rebuild.reset_mock()
+            day = next((self.root / "journal" / "cal.high_impact").glob("*.ndjson"))
+            os.utime(day, ns=(1, 1))  # another writer touched the dataset between polls
+            self.assertEqual(collect(), 0)
+            self.assertEqual(rebuild.call_count, 1)
 
     def test_ls_lists_the_dataset_with_its_schema_hash(self) -> None:
         code, out = self.run_cli("ls")
