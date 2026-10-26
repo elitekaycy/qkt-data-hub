@@ -59,12 +59,24 @@ class GdeltBackfillTest(unittest.TestCase):
         self.assertIn("GLOBAL", {r["scope"] for r in rows})
         self.assertTrue((out / "2026-10.done").exists())
 
+    def test_a_listed_batch_gdelt_does_not_serve_is_a_source_gap_not_a_failure(self):
+        def served(url, md5):
+            if "20261026003000" in url:
+                raise gdelt_backfill.SourceGap(url)
+            return FIXTURE.read_bytes()
+
+        gaps: list[str] = []
+        with mock.patch.object(gdelt_backfill, "fetch", served):
+            rows = gdelt_backfill.hour_rows(HOUR_END, self.master, gaps)
+        self.assertEqual({r["fields"]["batches"] for r in rows}, {"2"})
+        self.assertEqual(len(gaps), 1)
+
     def test_an_hour_is_not_written_before_it_could_be_published(self):
         hours = gdelt_backfill.month_hours("2026-10")
         self.assertEqual(hours[0], int(dt.datetime(2026, 10, 1, 1, tzinfo=dt.UTC).timestamp() * 1000))
         self.assertEqual(hours[-1], int(dt.datetime(2026, 11, 1, tzinfo=dt.UTC).timestamp() * 1000))
         out = Path(tempfile.mkdtemp())
-        with mock.patch.object(gdelt_backfill, "hour_rows", lambda h, m: [{"h": h}]):
+        with mock.patch.object(gdelt_backfill, "hour_rows", lambda h, m, g=None: [{"h": h}]):
             gdelt_backfill.run_month("2026-10", out, {}, workers=2, now_ms=HOUR_END + 4 * 60_000)
         written = [json.loads(line)["h"] for line in (out / "2026-10.ndjson").read_text().splitlines()]
         self.assertEqual(max(written), HOUR_END - gdelt.HOUR_MS)
