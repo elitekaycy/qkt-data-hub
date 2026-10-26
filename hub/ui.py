@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import threading
 import time
 from collections import Counter
@@ -49,16 +50,36 @@ class _DayStats:
 
 # Per day file, keyed by (size, mtime): the journal is append-only, so a file that has not changed
 # needs reading once per process, and a poll re-reads only the day being written.
-_DAY_STATS: dict[Path, tuple[tuple[int, int], _DayStats]] = {}
+_DAY_STATS: dict[str, tuple[tuple[int, int], _DayStats]] = {}
 
 
-def _day_stats(path: Path) -> _DayStats:
-    st = path.stat()
-    stamp = (st.st_size, st.st_mtime_ns)
+def _day_files(root: Path, dataset: str) -> list[tuple[str, str, int, int]]:
+    """`(day, path, size, mtime_ns)` of each of a dataset's day files, oldest first.
+
+    `os.scandir` rather than `list_day_files`: a `Path` and a `stat()` per file were most of a poll's
+    cost across GDELT's 3,600 day files.
+    """
+    try:
+        listing = os.scandir(os.path.join(root, "journal", dataset))
+    except FileNotFoundError:
+        return []
+    with listing:
+        out = [
+            (e.name[: -len(".ndjson")], e.path, st.st_size, st.st_mtime_ns)
+            for e in listing
+            if e.name.endswith(".ndjson")
+            for st in [e.stat()]
+        ]
+    out.sort()
+    return out
+
+
+def _day_stats(path: str, size: int, mtime_ns: int) -> _DayStats:
+    stamp = (size, mtime_ns)
     cached = _DAY_STATS.get(path)
     if cached and cached[0] == stamp:
         return cached[1]
-    rows = read_day_file(path)
+    rows = read_day_file(Path(path))
     stats = _DayStats(
         records=len(rows),
         first_known_at=min((r.known_at for r in rows), default=0),
@@ -129,8 +150,8 @@ def state(root: Path, registry: Registry, policy: Policy) -> dict[str, Any]:
     datasets = []
     for name in registry.datasets():
         schema = registry.schema(name)
-        files = list_day_files(root, name)
-        days = [(p.stem, _day_stats(p)) for p in files]
+        files = _day_files(root, name)
+        days = [(day, _day_stats(path, size, mtime)) for day, path, size, mtime in files]
         stats = [d for _, d in days]
         filled = [d for d in stats if d.records]  # an empty day file has no known_at or seq
         availability: Counter[str] = Counter()
@@ -201,7 +222,8 @@ def records(root: Path, dataset: str, limit: int) -> list[dict[str, Any]]:
     taken by their highest `seq` until no unread file can beat the `limit`-th record found.
     """
     files = sorted(
-        ((d.last_seq, p) for p in list_day_files(root, dataset) for d in [_day_stats(p)] if d.records),
+        ((d.last_seq, Path(path)) for _, path, size, mtime in _day_files(root, dataset)
+         for d in [_day_stats(path, size, mtime)] if d.records),
         reverse=True,
     )
     rows: list[Any] = []

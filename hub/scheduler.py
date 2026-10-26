@@ -58,6 +58,11 @@ class Scheduler:
         self._state: dict[str, SourceState] = {name: SourceState() for name in registry.collecting()}
         self._next_compile = 0.0
         self._next_heartbeat = 0.0
+        # One writer for the daemon's life. Opening one repairs every day file of every dataset
+        # and rescans `seq`; per poll, with the calendars polled every minute and GDELT's 3,600
+        # day files, that was a third of a core. Holding it also makes the one-writer rule real:
+        # a backfill started beside the daemon fails at once instead of slipping in between polls.
+        self._writer: JournalWriter | None = None
 
     # -- cadence -------------------------------------------------------------------------
 
@@ -110,40 +115,39 @@ class Scheduler:
         if not due:
             return 0
         written = 0
-        writer = JournalWriter(self._config.root)
-        try:
-            for name in due:
-                state = self._state[name]
-                state.events = self._known_events(name)
-                try:
-                    written += collect_once(
-                        self._config.root,
-                        self._registry,
-                        name,
-                        timeout=self._config.timeout_seconds,
-                        writer=writer,
-                    )
-                    state.consecutive_failures = 0
-                    state.alerted = False
-                    state.last_success = now
-                    state.next_due = now + self._interval_for(name, state)
-                except HubError as e:
-                    from hub import status
+        if self._writer is None:
+            self._writer = JournalWriter(self._config.root)
+        writer = self._writer
+        for name in due:
+            state = self._state[name]
+            state.events = self._known_events(name)
+            try:
+                written += collect_once(
+                    self._config.root,
+                    self._registry,
+                    name,
+                    timeout=self._config.timeout_seconds,
+                    writer=writer,
+                )
+                state.consecutive_failures = 0
+                state.alerted = False
+                state.last_success = now
+                state.next_due = now + self._interval_for(name, state)
+            except HubError as e:
+                from hub import status
 
-                    status.record_collect(
-                        self._config.root, name, {"at": int(now * 1000), "ok": False, "error": str(e)}
-                    )
-                    state.consecutive_failures += 1
-                    state.next_due = now + self._config.retry_seconds
-                    log_every(f"collect-fail:{name}", 10, f"collect[{name}] failed: {e}")
-                    if state.consecutive_failures >= self._config.failures_before_alert and not state.alerted:
-                        state.alerted = True
-                        log(f"ALERT collect[{name}] has failed {state.consecutive_failures} times in a row")
-                # A first pass over every dataset takes minutes; beating only after it read as a
-                # dead writer for the whole of it.
-                self._beat()
-        finally:
-            writer.close()
+                status.record_collect(
+                    self._config.root, name, {"at": int(now * 1000), "ok": False, "error": str(e)}
+                )
+                state.consecutive_failures += 1
+                state.next_due = now + self._config.retry_seconds
+                log_every(f"collect-fail:{name}", 10, f"collect[{name}] failed: {e}")
+                if state.consecutive_failures >= self._config.failures_before_alert and not state.alerted:
+                    state.alerted = True
+                    log(f"ALERT collect[{name}] has failed {state.consecutive_failures} times in a row")
+            # A first pass over every dataset takes minutes; beating only after it read as a
+            # dead writer for the whole of it.
+            self._beat()
         return written
 
     def run(self, *, once: bool = False) -> int:
@@ -152,6 +156,14 @@ class Scheduler:
         self._beat()  # the previous process's beat is not this one's
         if self._config.compile_on_start or once:
             self._next_compile = 0.0
+        try:
+            return self._loop(once)
+        finally:
+            if self._writer is not None:
+                self._writer.close()
+                self._writer = None
+
+    def _loop(self, once: bool) -> int:
         while True:
             now = self._clock()
             self._poll_due()

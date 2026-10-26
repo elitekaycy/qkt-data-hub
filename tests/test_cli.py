@@ -22,6 +22,8 @@ from unittest import mock
 from hub.__main__ import EXIT_DATA, EXIT_OK, main
 from hub.collectors.declarative import Cadence
 from hub.config import HubConfig
+from hub.errors import StoreError
+from hub.journal import JournalWriter
 from hub.registry import Registry
 from hub.scheduler import Scheduler
 
@@ -217,6 +219,27 @@ class SchedulerCadenceTest(unittest.TestCase):
         with mock.patch.object(self.registry, "source", return_value=steady), \
                 mock.patch("hub.scheduler.read_range", side_effect=AssertionError("journal read")):
             self.assertEqual(scheduler._known_events("cal.high_impact"), ())
+
+    def test_one_writer_serves_every_poll_and_is_released_when_the_daemon_stops(self) -> None:
+        # Opening a writer repairs every day file of every dataset; once per poll (the calendars
+        # poll every minute) that was a third of a core on the production store.
+        now = [1_789_000_000.0]
+
+        def collect(_root, _registry, _name, **_kw):
+            now[0] += 3600.0  # every dataset is due again on the next pass
+            return 0
+
+        scheduler = Scheduler(self.config, self.registry, clock=lambda: now[0], sleep=lambda _s: None)
+        with mock.patch("hub.__main__.collect_once", collect), \
+                mock.patch("hub.scheduler.JournalWriter", wraps=JournalWriter) as opened:
+            for _ in range(3):
+                scheduler._poll_due()
+            self.assertEqual(opened.call_count, 1)
+            with self.assertRaises(StoreError):
+                JournalWriter(self.config.root)  # a backfill beside the running daemon
+            with mock.patch("hub.scheduler.compile_all"):
+                scheduler.run(once=True)
+        JournalWriter(self.config.root).close()  # released
 
     def test_the_heartbeat_is_this_process_s_from_the_start_and_after_each_collector(self) -> None:
         # A first pass collects every dataset before it compiles; the heartbeat used to be written
