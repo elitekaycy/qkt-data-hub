@@ -174,7 +174,10 @@ def compile_windows(root: Path | str, schema: DatasetSchema, windows: Sequence[s
     if not windows:
         return []
     _, _, _, known_to = _month_bounds(max(windows))
-    history = read_range(root, schema.name, MIN_TIMESTAMP_MS, known_to)
+    # Derived fields are verified against everything before them; without any, only the windows
+    # being written need reading.
+    _, _, known_from, _ = _month_bounds(min(windows)) if not schema.derived_fields() else ("", "", MIN_TIMESTAMP_MS, 0)
+    history = read_range(root, schema.name, known_from, known_to)
     _verify_derived_fields(schema, history)
     return [_write_window(root, schema, window, history) for window in windows]
 

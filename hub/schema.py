@@ -35,7 +35,7 @@ _ENVELOPE_EXPRESSION_NAMES = frozenset({"known_at", "effective_at"})
 #: rather than only payload fields.
 _ENVELOPE_KEY_NAMES = frozenset({"scope", "period_start", "period_end", "effective_at"})
 
-_SCOPE_KINDS = frozenset({"currency", "instrument", "issuer", "all"})
+_SCOPE_KINDS = frozenset({"currency", "instrument", "issuer", "region", "all"})
 _NULL_POLICIES = frozenset({"forbid", "allow", "allow_until_release"})
 
 # `collector` and `retention` are carried but not interpreted here: the schema owns what a

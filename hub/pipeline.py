@@ -206,6 +206,9 @@ def ingest(
     """
     result = IngestResult()
     wall = clock() if clock is not None else now_ms
+    # History exists for derived fields alone; a dataset without any never needs it, and building
+    # it costs a copy of the scope's past per record -- quadratic for a decade of hourly records.
+    keeps_history = bool(schema.derived_fields())
     for candidate in candidates:
         try:
             if "parse_error" in candidate.extra:
@@ -222,9 +225,8 @@ def ingest(
             key = build_key(schema, candidate)
             envelope = {"known_at": known_at, "effective_at": candidate.effective_at}
             scope_history = history.setdefault(candidate.scope, ScopeHistory())
-            payload = derive_fields(
-                schema, candidate.fields, envelope, scope_history.before(candidate.effective_at, key)
-            )
+            earlier = scope_history.before(candidate.effective_at, key) if keeps_history else []
+            payload = derive_fields(schema, candidate.fields, envelope, earlier)
             payload = schema.validate_payload(payload)
             record = Record.create(
                 dataset=schema.name,
@@ -267,6 +269,7 @@ def ingest(
             continue
         if assigned.revision > 1:
             result.revisions += 1
-        scope_history.upsert(candidate.effective_at, key, dict(assigned.fields))
+        if keeps_history:
+            scope_history.upsert(candidate.effective_at, key, dict(assigned.fields))
         result.records.append(assigned)
     return result
