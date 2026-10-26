@@ -22,6 +22,7 @@ from hub.collectors import Candidate
 from hub.compiler import compile_all, verify
 from hub.config import HubConfig
 from hub.dedupe import RevisionIndex
+from hub.derive import lookback
 from hub.journal import JournalWriter
 from hub.logging import log
 from hub.pipeline import ScopeHistory, ingest
@@ -76,10 +77,13 @@ def _history_for(root: Path, schema: DatasetSchema) -> tuple[RevisionIndex, dict
     except HubError:
         return index, history
     index.rebuild_from(records)
-    for record in records:
-        history.setdefault(record.scope, ScopeHistory()).upsert(
-            record.effective_at, record.key, dict(record.fields)
-        )
+    # Only a derived field that looks back reads history (`ingest`'s own test); for the rest, a copy
+    # of every record's fields is memory held for nothing -- 684,584 records for GDELT.
+    if max((lookback(spec.derived) for spec in schema.derived_fields()), default=0) > 0:
+        for record in records:
+            history.setdefault(record.scope, ScopeHistory()).upsert(
+                record.effective_at, record.key, dict(record.fields)
+            )
     return index, history
 
 

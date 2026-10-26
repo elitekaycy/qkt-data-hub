@@ -115,6 +115,21 @@ class CliTest(unittest.TestCase):
             self.assertEqual(collect(), 0)
             self.assertEqual(rebuild.call_count, 1)
 
+    def test_a_dataset_whose_fields_never_look_back_keeps_no_history_and_still_dedupes(self) -> None:
+        # GDELT has no derived field; its 684,584 records' fields were kept for nothing.
+        from hub import __main__ as cli
+
+        yaml = (self.datasets / "cal.high_impact.yaml").read_text()
+        plain = "\n".join(line for line in yaml.splitlines() if "derived:" not in line)
+        (self.datasets / "cal.high_impact.yaml").write_text(plain + "\n")
+        registry = Registry.load(self.datasets)
+        self.assertGreater(cli.collect_once(self.root, registry, "cal.high_impact", timeout=5), 0)
+        index, history = cli._history_for(self.root, registry.schema("cal.high_impact"))
+        self.assertEqual(history, {})
+        self.assertTrue(index._state)
+        cli._HISTORY.clear()
+        self.assertEqual(cli.collect_once(self.root, registry, "cal.high_impact", timeout=5), 0)  # all duplicates
+
     def test_ls_lists_the_dataset_with_its_schema_hash(self) -> None:
         code, out = self.run_cli("ls")
         self.assertEqual(code, EXIT_OK)
