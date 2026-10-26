@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
-from hub.derive import compile_expr
+from hub.derive import compile_expr, lookback
 from hub.errors import ConfigError, SchemaError, StoreError
 from hub.manifest import DatasetManifest, FieldEntry, Manifest, WindowEntry
 from hub.pipeline import ScopeHistory
@@ -123,6 +123,7 @@ def _verify_derived_fields(schema: DatasetSchema, records: Sequence[Record]) -> 
     if not derived_specs:
         return
     exprs = {spec.name: compile_expr(spec.derived) for spec in derived_specs}
+    reach = max(lookback(spec.derived) for spec in derived_specs)
 
     by_scope: dict[str, list[Record]] = {}
     for record in records:
@@ -132,7 +133,7 @@ def _verify_derived_fields(schema: DatasetSchema, records: Sequence[Record]) -> 
         scope_history = ScopeHistory()
         for record in scope_records:
             payload = _payload_with_envelope(record)
-            history = scope_history.before(record.effective_at, record.key)
+            history = scope_history.before(record.effective_at, record.key, limit=reach)
             for name, expr in exprs.items():
                 expected = expr(payload, history)
                 actual = record.fields.get(name)

@@ -106,3 +106,30 @@ class DeriveTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LookbackTest(unittest.TestCase):
+    def test_each_function_reports_how_far_back_it_reads(self):
+        from hub.derive import lookback
+
+        self.assertEqual(lookback("actual - forecast"), 0)
+        self.assertEqual(lookback("diff(value, 1)"), 1)
+        self.assertEqual(lookback("lag(value, 3) + zscore(value, window=24, min_obs=8)"), 24)
+        self.assertEqual(lookback("-pct_rank(value, window=10)"), 10)
+        self.assertEqual(lookback("since(at)"), 0)
+
+    def test_a_limited_history_is_exactly_the_tail_of_the_full_one(self):
+        import random
+
+        from hub.pipeline import ScopeHistory
+
+        rng = random.Random(11)
+        history = ScopeHistory()
+        days = list(range(300))
+        rng.shuffle(days)
+        for d in days + rng.sample(days, 40):  # out of order, then revisions of existing keys
+            history.upsert(d * 1000, f"k{d}", {"v": rng.random()})
+        for d in rng.sample(range(300), 60):
+            for limit in (0, 1, 5, 24, 400):
+                full = history.before(d * 1000, f"k{d}")
+                self.assertEqual(history.before(d * 1000, f"k{d}", limit=limit), full[-limit:] if limit else [])

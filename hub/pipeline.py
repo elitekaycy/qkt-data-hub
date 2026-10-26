@@ -30,7 +30,7 @@ from typing import Any
 
 from hub.collectors import Candidate
 from hub.dedupe import RevisionIndex, assign
-from hub.derive import compile_expr
+from hub.derive import compile_expr, lookback
 from hub.quarantine import Quarantine
 from hub.schema import DatasetSchema
 from hubread.errors import HubError
@@ -148,7 +148,7 @@ class ScopeHistory:
         self._fields[key] = fields
         self._effective_at[key] = effective_at
 
-    def before(self, effective_at: int, key: str) -> list[dict[str, Any]]:
+    def before(self, effective_at: int, key: str, limit: int | None = None) -> list[dict[str, Any]]:
         """Every fact that precedes `(effective_at, key)` on the timeline, oldest first.
 
         `bisect_left` on the same `(effective_at, key)` ordering `upsert` maintains finds the
@@ -162,7 +162,19 @@ class ScopeHistory:
         regardless of whether `effective_at` moved.
         """
         cut = bisect.bisect_left(self._order, (effective_at, key))
-        return [self._fields[k] for _, k in self._order[:cut] if k != key]
+        if limit is None:
+            return [self._fields[k] for _, k in self._order[:cut] if k != key]
+        # Only the newest `limit` facts, walked back from the cut: what a derived expression with
+        # that lookback reads (`hub.derive.lookback`), at a cost independent of the history's length.
+        out: list[dict[str, Any]] = []
+        i = cut - 1
+        while i >= 0 and len(out) < limit:
+            k = self._order[i][1]
+            if k != key:
+                out.append(self._fields[k])
+            i -= 1
+        out.reverse()
+        return out
 
     def payloads(self) -> list[dict[str, Any]]:
         """Every currently known fact for this scope, oldest `effective_at` first.
@@ -208,7 +220,8 @@ def ingest(
     wall = clock() if clock is not None else now_ms
     # History exists for derived fields alone; a dataset without any never needs it, and building
     # it costs a copy of the scope's past per record -- quadratic for a decade of hourly records.
-    keeps_history = bool(schema.derived_fields())
+    reach = max((lookback(spec.derived) for spec in schema.derived_fields()), default=0)
+    keeps_history = reach > 0
     for candidate in candidates:
         try:
             if "parse_error" in candidate.extra:
@@ -225,7 +238,7 @@ def ingest(
             key = build_key(schema, candidate)
             envelope = {"known_at": known_at, "effective_at": candidate.effective_at}
             scope_history = history.setdefault(candidate.scope, ScopeHistory())
-            earlier = scope_history.before(candidate.effective_at, key) if keeps_history else []
+            earlier = scope_history.before(candidate.effective_at, key, limit=reach) if keeps_history else []
             payload = derive_fields(schema, candidate.fields, envelope, earlier)
             payload = schema.validate_payload(payload)
             record = Record.create(
