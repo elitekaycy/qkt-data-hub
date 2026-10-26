@@ -116,6 +116,10 @@ class _Node:
         """Evaluate against one payload and its history, `None` on any missing input."""
         raise NotImplementedError
 
+    def lookback(self) -> int:
+        """How many most recent history entries this node reads; 0 when it reads none."""
+        return 0
+
 
 @dataclass(frozen=True, slots=True)
 class _Literal(_Node):
@@ -149,6 +153,9 @@ class _Unary(_Node):
 
     operand: _Node
 
+    def lookback(self) -> int:
+        return self.operand.lookback()
+
     def names(self) -> frozenset[str]:
         return self.operand.names()
 
@@ -171,6 +178,9 @@ class _BinOp(_Node):
     op: str
     left: _Node
     right: _Node
+
+    def lookback(self) -> int:
+        return max(self.left.lookback(), self.right.lookback())
 
     def names(self) -> frozenset[str]:
         return self.left.names() | self.right.names()
@@ -205,6 +215,10 @@ class _Call(_Node):
 
     def names(self) -> frozenset[str]:
         return frozenset({self.field})
+
+    def lookback(self) -> int:
+        # lag/diff read the n-th entry back; zscore/pct_rank their window; since/until none.
+        return self.int_args[0] if self.func in ("lag", "diff", "zscore", "pct_rank") else 0
 
     def eval(self, payload: Payload, history: History) -> Decimal | None:
         if self.func == "lag":
@@ -512,6 +526,13 @@ def referenced_names(expr: str) -> frozenset[str]:
     tokens = _tokenize(expr)
     node = _Parser(tokens, expr).parse()
     return node.names()
+
+
+def lookback(expr: str) -> int:
+    """How many of the most recent history entries `expr` reads: the most any of its `lag`, `diff`,
+    `zscore` or `pct_rank` calls reaches back. Every history function reads only the newest entries,
+    so handing it exactly these gives the same result as handing it everything."""
+    return _Parser(_tokenize(expr), expr).parse().lookback()
 
 
 def compile_expr(expr: str) -> Expr:

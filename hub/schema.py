@@ -23,7 +23,7 @@ from typing import Any
 from hub.derive import RESERVED_EXPRESSION_NAMES, referenced_names
 from hub.simpleyaml import load_path
 from hubread.errors import RecordError, SchemaError
-from hubread.record import FIELD_NAME_RE, RESERVED_FIELD_NAMES, canonical_json, decimal_str
+from hubread.record import DOMAINS, FIELD_NAME_RE, RESERVED_FIELD_NAMES, canonical_json, decimal_str
 from hubread.snapshot import NULL_SENTINEL, SCALE
 
 #: Envelope timestamp names a derived expression may read in addition to declared fields --
@@ -35,7 +35,7 @@ _ENVELOPE_EXPRESSION_NAMES = frozenset({"known_at", "effective_at"})
 #: rather than only payload fields.
 _ENVELOPE_KEY_NAMES = frozenset({"scope", "period_start", "period_end", "effective_at"})
 
-_SCOPE_KINDS = frozenset({"currency", "instrument", "issuer", "all"})
+_SCOPE_KINDS = frozenset({"currency", "instrument", "issuer", "region", "all"})
 _NULL_POLICIES = frozenset({"forbid", "allow", "allow_until_release"})
 
 # `collector` and `retention` are carried but not interpreted here: the schema owns what a
@@ -335,6 +335,10 @@ def load_schema(path: Path) -> DatasetSchema:
     dataset_name = doc["dataset"]
     if not isinstance(dataset_name, str) or not dataset_name:
         raise SchemaError(f"{path}: dataset must be a non-empty string")
+    # The record format refuses a dataset outside a registered domain at write time; refusing it
+    # here makes `validate` say so, instead of every record landing in quarantine.
+    if dataset_name.split(".", 1)[0] not in DOMAINS:
+        raise SchemaError(f"{path}: dataset {dataset_name!r} must start with a registered domain: {sorted(DOMAINS)}")
 
     version = doc["version"]
     if not isinstance(version, int) or isinstance(version, bool):

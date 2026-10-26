@@ -1,0 +1,29 @@
+# What the world's news reported each hour, per region, from GDELT 2.0 event coding: how much was
+# covered, how much of it was conflict, threats, protests, sanctions or violence, and how the
+# coverage read (article-weighted Goldstein stability score, -10..10, and tone). One record per
+# region per hour, visible five minutes after the hour ends (GDELT posts each batch before its
+# stamp). `batches` says how many of the hour's four 15-minute exports GDELT published: fewer
+# than 4 is a gap at the source, not a quiet hour. History: tools/gdelt_backfill.py.
+dataset: text.gdelt.events
+version: 1
+title: GDELT news events per region per hour
+scope_kind: region
+key: [effective_at, scope]
+collector:
+  kind: code
+  module: hub.collectors.gdelt
+  class: GdeltEventsSource
+fields:
+  events:            { type: number, unit: count, null_policy: forbid }
+  articles:          { type: number, unit: count, null_policy: forbid }
+  material_conflict: { type: number, unit: count, null_policy: forbid }
+  verbal_conflict:   { type: number, unit: count, null_policy: forbid }
+  threats:           { type: number, unit: count, null_policy: forbid }
+  protests:          { type: number, unit: count, null_policy: forbid }
+  sanctions:         { type: number, unit: count, null_policy: forbid }
+  violence:          { type: number, unit: count, null_policy: forbid }
+  goldstein:         { type: number, null_policy: allow }
+  tone:              { type: number, null_policy: allow }
+  batches:           { type: number, unit: count, null_policy: forbid }
+quality:
+  range: { batches: [1, 4], goldstein: [-10, 10], tone: [-100, 100] }

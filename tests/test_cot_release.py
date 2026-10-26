@@ -61,6 +61,38 @@ class CotReleaseTest(unittest.TestCase):
         self.assertEqual(release_date(dt.date(2025, 12, 23)), dt.date(2025, 12, 29))
         self.assertEqual(release_date(dt.date(2025, 12, 30)), dt.date(2026, 1, 5))
 
+    def test_every_announced_change_since_2008(self):
+        # COT Historical Special Announcements: report date -> publication date as announced.
+        announced = {
+            "2008-12-22": "2008-12-29",  # "will be for the prior Monday's open interest positions"
+            "2008-12-30": "2009-01-05",
+            "2013-10-01": "2013-10-25",  # 6745-13, first delayed report
+            "2014-12-23": "2014-12-30",
+            "2015-06-30": "2015-07-06",  # July 3 holiday
+            "2018-12-24": "2019-02-01",  # Monday data before the 2018 Christmas, then 7864-19
+            "2020-12-21": "2020-12-28",  # Monday data, Thursday 24 December added holiday
+            "2021-06-15": "2021-06-21",  # Juneteenth's first observance
+            "2023-01-31": "2023-02-24",  # ION cyber incident
+            "2023-02-07": "2023-03-03",
+            "2023-02-14": "2023-03-08",
+            "2023-02-21": "2023-03-10",
+            "2023-02-28": "2023-03-14",
+            "2023-03-07": "2023-03-16",
+            "2023-03-14": "2023-03-21",
+            "2025-01-07": "2025-01-13",  # President Carter, day of mourning
+        }
+        for report, release in announced.items():
+            self.assertEqual(release_date(dt.date.fromisoformat(report)), dt.date.fromisoformat(release), report)
+
+    def test_the_2013_catch_up_is_never_earlier_than_the_announced_plan_allows(self):
+        # Two reports the week of 28 October, two more by 8 November, the schedule resumed 8 November.
+        self.assertEqual(release_date(dt.date(2013, 10, 8)), dt.date(2013, 11, 1))
+        self.assertEqual(release_date(dt.date(2013, 10, 29)), dt.date(2013, 11, 8))
+        self.assertEqual(release_date(dt.date(2013, 11, 5)), dt.date(2013, 11, 8))
+
+    def test_a_report_after_the_ion_backlog_is_back_on_friday(self):
+        self.assertEqual(release_date(dt.date(2023, 3, 21)), dt.date(2023, 3, 24))
+
     def test_release_is_15_30_new_york_in_summer_and_winter(self):
         summer = dt.datetime.fromtimestamp(release_instant_ms(dt.date(2024, 7, 9)) / 1000, dt.UTC)
         winter = dt.datetime.fromtimestamp(release_instant_ms(dt.date(2024, 1, 9)) / 1000, dt.UTC)

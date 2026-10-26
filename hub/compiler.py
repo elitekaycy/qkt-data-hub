@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
-from hub.derive import compile_expr
+from hub.derive import compile_expr, lookback
 from hub.errors import ConfigError, SchemaError, StoreError
 from hub.manifest import DatasetManifest, FieldEntry, Manifest, WindowEntry
 from hub.pipeline import ScopeHistory
@@ -123,6 +123,7 @@ def _verify_derived_fields(schema: DatasetSchema, records: Sequence[Record]) -> 
     if not derived_specs:
         return
     exprs = {spec.name: compile_expr(spec.derived) for spec in derived_specs}
+    reach = max(lookback(spec.derived) for spec in derived_specs)
 
     by_scope: dict[str, list[Record]] = {}
     for record in records:
@@ -132,7 +133,7 @@ def _verify_derived_fields(schema: DatasetSchema, records: Sequence[Record]) -> 
         scope_history = ScopeHistory()
         for record in scope_records:
             payload = _payload_with_envelope(record)
-            history = scope_history.before(record.effective_at, record.key)
+            history = scope_history.before(record.effective_at, record.key, limit=reach)
             for name, expr in exprs.items():
                 expected = expr(payload, history)
                 actual = record.fields.get(name)
@@ -152,15 +153,38 @@ def compile_dataset(root: Path | str, schema: DatasetSchema, window: str) -> Win
     within `window`: a z-score or a lag computed at the start of a month legitimately depends on
     values from the month before, and limiting history to the window itself would report every
     such value as a mismatch. Verification therefore covers everything known up to the end of
-    `window`, which also means compiling a later window re-checks all of history up to that
-    point -- a second, free audit pass rather than a cost anyone has to ask for.
+    `window`. Compiling many windows goes through `compile_windows`, which does that work once.
     """
     root = Path(root)
-    from_day, to_day, known_from, known_to = _month_bounds(window)
-
+    _, _, _, known_to = _month_bounds(window)
     history = read_range(root, schema.name, MIN_TIMESTAMP_MS, known_to)
     _verify_derived_fields(schema, history)
+    return _write_window(root, schema, window, history)
 
+
+def compile_windows(root: Path | str, schema: DatasetSchema, windows: Sequence[str]) -> list[WindowResult]:
+    """Compiles every window in `windows` from one read of the journal and one verification pass.
+
+    Byte-for-byte what `compile_dataset` produces window by window: the verification of a window
+    is the verification of every record known by its end, and one pass over the whole journal in
+    the same order checks each record against exactly the history it was checked against there.
+    Doing it per window re-read and re-verified the whole journal for every month, which grew with
+    the square of the history and made a store backfilled from 2003 take hours to compile.
+    """
+    root = Path(root)
+    if not windows:
+        return []
+    _, _, _, known_to = _month_bounds(max(windows))
+    # Derived fields are verified against everything before them; without any, only the windows
+    # being written need reading.
+    _, _, known_from, _ = _month_bounds(min(windows)) if not schema.derived_fields() else ("", "", MIN_TIMESTAMP_MS, 0)
+    history = read_range(root, schema.name, known_from, known_to)
+    _verify_derived_fields(schema, history)
+    return [_write_window(root, schema, window, history) for window in windows]
+
+
+def _write_window(root: Path, schema: DatasetSchema, window: str, history: Sequence[Record]) -> WindowResult:
+    from_day, to_day, known_from, known_to = _month_bounds(window)
     window_records = [r for r in history if known_from <= r.known_at <= known_to]
     window_records.sort(key=sort_key)
 
@@ -218,7 +242,8 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
 
     Idempotent: recompiling with an unchanged journal reproduces the same per-window hashes, so
     running this repeatedly (a scheduled job, a manual rebuild) never perturbs a hash a backtest
-    has already cited.
+    has already cited. Windows no new record touched are kept rather than rewritten
+    (`_unchanged_windows`); whenever anything is recompiled, the dataset's whole history is verified.
     """
     root = Path(root)
     manifest = Manifest.load(root)
@@ -229,8 +254,13 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
         if not windows:
             continue
 
-        entries = [
-            WindowEntry(
+        all_records = read_range(root, name, MIN_TIMESTAMP_MS, MAX_TIMESTAMP_MS)
+        last_seq = max((r.seq for r in all_records), default=0)
+        last_known_at = max((r.known_at for r in all_records), default=None)
+
+        reused = _unchanged_windows(root, schema, manifest.datasets.get(name), all_records, windows)
+        compiled = {
+            result.from_day[:7]: WindowEntry(
                 from_day=result.from_day,
                 to_day=result.to_day,
                 file=str(result.path.relative_to(root)),
@@ -238,12 +268,9 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
                 records=result.records,
                 raw_deps=result.raw_deps,
             )
-            for result in (compile_dataset(root, schema, window) for window in windows)
-        ]
-
-        all_records = read_range(root, name, MIN_TIMESTAMP_MS, MAX_TIMESTAMP_MS)
-        last_seq = max((r.seq for r in all_records), default=0)
-        last_known_at = max((r.known_at for r in all_records), default=None)
+            for result in compile_windows(root, schema, [w for w in windows if w not in reused])
+        }
+        entries = [reused.get(w) or compiled[w] for w in windows]
 
         manifest.datasets[name] = DatasetManifest(
             schema_hash=schema.hash(),
@@ -264,6 +291,48 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
          "windows": sum(len(e.windows) for e in manifest.datasets.values())},
     )
     return manifest
+
+
+def _unchanged_windows(
+    root: Path,
+    schema: DatasetSchema,
+    previous: DatasetManifest | None,
+    records: Sequence[Record],
+    windows: Sequence[str],
+) -> dict[str, WindowEntry]:
+    """The manifest entries a compile can keep as they are, by window.
+
+    The journal is append-only, so a window can only change when a record lands in it, and every
+    new record has a higher `seq` than the manifest last saw. A window before the first month any
+    new record lands in, with the same schema, the same record count and its snapshot on disk,
+    would compile to the same bytes; recompiling it on every cycle is what made the daemon's
+    compile grow with the whole history. `verify` still recompiles everything.
+    """
+    if previous is None or previous.schema_hash != schema.hash():
+        return {}
+    last_seq = max((r.seq for r in records), default=0)
+    if last_seq < previous.last_seq:
+        return {}  # the journal was replaced, not appended to
+    first_changed = min((_window_of(r.known_at) for r in records if r.seq > previous.last_seq), default=None)
+    counts: dict[str, int] = {}
+    for r in records:
+        month = _window_of(r.known_at)
+        counts[month] = counts.get(month, 0) + 1
+    kept: dict[str, WindowEntry] = {}
+    for entry in previous.windows:
+        month = entry.from_day[:7]
+        if (
+            month in windows
+            and (first_changed is None or month < first_changed)
+            and counts.get(month, 0) == entry.records
+            and (root / entry.file).is_file()
+        ):
+            kept[month] = entry
+    return kept
+
+
+def _window_of(known_at: int) -> str:
+    return datetime.fromtimestamp(known_at / 1000, UTC).strftime("%Y-%m")
 
 
 def verify(root: Path | str, registry: object | None = None) -> list[str]:
@@ -307,28 +376,30 @@ def verify(root: Path | str, registry: object | None = None) -> list[str]:
                 problems.append(f"{name}: cannot load schema at {tried}")
                 continue
 
+        present = []
         for entry in dataset_manifest.windows:
             label = f"{name} window {entry.from_day}_{entry.to_day}"
             file_path = root / entry.file
             if not file_path.is_file():
                 problems.append(f"{label}: missing snapshot file {file_path}")
                 continue
-
             on_disk_hash = sha256_of(file_path.read_bytes())
             if on_disk_hash != entry.sha256:
                 problems.append(
                     f"{label}: snapshot bytes ({on_disk_hash}) no longer match manifest hash ({entry.sha256})"
                 )
+            present.append(entry)
 
-            window = entry.from_day[:7]
-            try:
-                recompiled = compile_dataset(root, schema, window)
-            except StoreError as e:
-                problems.append(f"{label}: recompilation failed: {e}")
-                continue
-            if recompiled.sha256 != entry.sha256:
+        try:
+            recompiled = compile_windows(root, schema, [entry.from_day[:7] for entry in present])
+        except StoreError as e:
+            problems.append(f"{name}: recompilation failed: {e}")
+            continue
+        for entry, result in zip(present, recompiled, strict=True):
+            if result.sha256 != entry.sha256:
                 problems.append(
-                    f"{label}: recompiled hash ({recompiled.sha256}) differs from manifest hash ({entry.sha256})"
+                    f"{name} window {entry.from_day}_{entry.to_day}: recompiled hash ({result.sha256}) "
+                    f"differs from manifest hash ({entry.sha256})"
                 )
 
     record_step(Path(root), "verify", {"at": _now_ms(), "ok": not problems, "problems": problems[:50]})
