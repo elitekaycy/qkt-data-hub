@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 from hub.errors import StoreError
 from hub.journal import JournalWriter
 from hub.record import Availability, Record
-from hubread.journal import JournalTail, journal_path, read_range
+from hubread.journal import JournalTail, day_str, journal_path, read_range
 
 BASE = dict(
     dataset="macro.us.cpi",
@@ -58,6 +58,33 @@ class JournalWriterTest(unittest.TestCase):
             with JournalWriter(root) as w2:
                 r3 = w2.append(make(known_at=BASE["known_at"] + 2000))
                 self.assertEqual(r3.seq, 3)
+
+    def test_a_live_append_after_a_backfill_numbers_above_the_backfill(self):
+        # A backfill appends to old days, so the highest seq is not in the newest file. The writer
+        # used to resume from the newest file's tail and number the next live record below the
+        # backfill, and a live tail -- which delivers only seq above the highest it has seen --
+        # dropped it.
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            with JournalWriter(root) as live:
+                live.append(make(known_at=BASE["known_at"]))
+            with JournalWriter(root) as backfill:
+                old = [backfill.append(make(known_at=BASE["known_at"] - k * 86_400_000)) for k in (30, 20, 10)]
+            self.assertEqual([r.seq for r in old], [2, 3, 4])
+            with JournalWriter(root) as live:
+                self.assertEqual(live.append(make(known_at=BASE["known_at"] + 1000)).seq, 5)
+
+    def test_resume_reads_every_line_of_a_file_two_runs_left_out_of_order(self):
+        # Stores written before the fix have day files whose seq is not in line order.
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            old_day = BASE["known_at"] - 10 * 86_400_000
+            path = journal_path(root, BASE["dataset"], day_str(old_day))
+            path.parent.mkdir(parents=True)
+            lines = [make(known_at=old_day + i).replace(seq=seq).with_id().to_json() for i, seq in ((0, 7), (1, 2))]
+            path.write_text("\n".join(lines) + "\n")
+            with JournalWriter(root) as w:
+                self.assertEqual(w.append(make()).seq, 8)
 
     def test_second_writer_on_same_root_conflicts(self):
         with TemporaryDirectory() as d:
