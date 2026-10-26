@@ -52,6 +52,11 @@ class SchemaTest(unittest.TestCase):
         with self.assertRaisesRegex(SchemaError, "unknown"):
             self._load(SCHEMA + "\nnonsense: 1\n")
 
+    def test_rejects_a_dataset_outside_the_registered_domains(self):
+        # The writer would quarantine every record of it; validation must say so first.
+        with self.assertRaisesRegex(SchemaError, "registered domain"):
+            self._load(SCHEMA.replace("dataset: macro.us.cpi", "dataset: news.us.cpi"))
+
     def test_rejects_field_name_colliding_with_envelope(self):
         with self.assertRaisesRegex(SchemaError, "known_at"):
             self._load(SCHEMA.replace("  actual:", "  known_at:"))

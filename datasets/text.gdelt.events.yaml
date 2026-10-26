@@ -4,7 +4,7 @@
 # region per hour, visible five minutes after the hour ends (GDELT posts each batch before its
 # stamp). `batches` says how many of the hour's four 15-minute exports GDELT published: fewer
 # than 4 is a gap at the source, not a quiet hour. History: tools/gdelt_backfill.py.
-dataset: news.gdelt.events
+dataset: text.gdelt.events
 version: 1
 title: GDELT news events per region per hour
 scope_kind: region

@@ -75,10 +75,10 @@ class GdeltTest(unittest.TestCase):
     def test_live_fetches_the_newest_hour_past_the_lag_once(self):
         events, _ = gdelt.parse_export(FIXTURE.read_bytes())
         clock = HOUR_END / 1000 + 4 * 60  # 01:04: the 01:00 hour is not past its lag yet
-        source = GdeltEventsSource("news.gdelt.events", clock=lambda: clock)
+        source = GdeltEventsSource("text.gdelt.events", clock=lambda: clock)
         self.assertEqual(source.latest_hour_end(), HOUR_END - gdelt.HOUR_MS)
         clock = HOUR_END / 1000 + 6 * 60
-        source = GdeltEventsSource("news.gdelt.events", clock=lambda: clock)
+        source = GdeltEventsSource("text.gdelt.events", clock=lambda: clock)
         calls = []
 
         def download(stamp, timeout):

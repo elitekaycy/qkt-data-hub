@@ -1,4 +1,4 @@
-"""Backfill `news.gdelt.events` from GDELT's archive, month by month, resumably.
+"""Backfill `text.gdelt.events` from GDELT's archive, month by month, resumably.
 
 Every hour is computed by the same `hub.collectors.gdelt` functions the live collector uses, from
 the export batches GDELT's master file list names, each checked against the MD5 the list gives.
@@ -12,7 +12,7 @@ live collector first could publish them.
 Usage:
     python3 tools/gdelt_backfill.py --out /var/tmp/gdelt-backfill --since 2015-03 --until 2026-10
     for f in /var/tmp/gdelt-backfill/*.ndjson; do
-      python3 -m hub --root <store> backfill news.gdelt.events --file "$f" --source gdelt
+      python3 -m hub --root <store> backfill text.gdelt.events --file "$f" --source gdelt
     done
 """
 from __future__ import annotations
