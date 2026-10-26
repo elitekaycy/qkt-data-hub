@@ -152,15 +152,35 @@ def compile_dataset(root: Path | str, schema: DatasetSchema, window: str) -> Win
     within `window`: a z-score or a lag computed at the start of a month legitimately depends on
     values from the month before, and limiting history to the window itself would report every
     such value as a mismatch. Verification therefore covers everything known up to the end of
-    `window`, which also means compiling a later window re-checks all of history up to that
-    point -- a second, free audit pass rather than a cost anyone has to ask for.
+    `window`. Compiling many windows goes through `compile_windows`, which does that work once.
     """
     root = Path(root)
-    from_day, to_day, known_from, known_to = _month_bounds(window)
-
+    _, _, _, known_to = _month_bounds(window)
     history = read_range(root, schema.name, MIN_TIMESTAMP_MS, known_to)
     _verify_derived_fields(schema, history)
+    return _write_window(root, schema, window, history)
 
+
+def compile_windows(root: Path | str, schema: DatasetSchema, windows: Sequence[str]) -> list[WindowResult]:
+    """Compiles every window in `windows` from one read of the journal and one verification pass.
+
+    Byte-for-byte what `compile_dataset` produces window by window: the verification of a window
+    is the verification of every record known by its end, and one pass over the whole journal in
+    the same order checks each record against exactly the history it was checked against there.
+    Doing it per window re-read and re-verified the whole journal for every month, which grew with
+    the square of the history and made a store backfilled from 2003 take hours to compile.
+    """
+    root = Path(root)
+    if not windows:
+        return []
+    _, _, _, known_to = _month_bounds(max(windows))
+    history = read_range(root, schema.name, MIN_TIMESTAMP_MS, known_to)
+    _verify_derived_fields(schema, history)
+    return [_write_window(root, schema, window, history) for window in windows]
+
+
+def _write_window(root: Path, schema: DatasetSchema, window: str, history: Sequence[Record]) -> WindowResult:
+    from_day, to_day, known_from, known_to = _month_bounds(window)
     window_records = [r for r in history if known_from <= r.known_at <= known_to]
     window_records.sort(key=sort_key)
 
@@ -238,7 +258,7 @@ def compile_all(root: Path | str, registry: DatasetRegistry) -> Manifest:
                 records=result.records,
                 raw_deps=result.raw_deps,
             )
-            for result in (compile_dataset(root, schema, window) for window in windows)
+            for result in compile_windows(root, schema, windows)
         ]
 
         all_records = read_range(root, name, MIN_TIMESTAMP_MS, MAX_TIMESTAMP_MS)
@@ -307,28 +327,30 @@ def verify(root: Path | str, registry: object | None = None) -> list[str]:
                 problems.append(f"{name}: cannot load schema at {tried}")
                 continue
 
+        present = []
         for entry in dataset_manifest.windows:
             label = f"{name} window {entry.from_day}_{entry.to_day}"
             file_path = root / entry.file
             if not file_path.is_file():
                 problems.append(f"{label}: missing snapshot file {file_path}")
                 continue
-
             on_disk_hash = sha256_of(file_path.read_bytes())
             if on_disk_hash != entry.sha256:
                 problems.append(
                     f"{label}: snapshot bytes ({on_disk_hash}) no longer match manifest hash ({entry.sha256})"
                 )
+            present.append(entry)
 
-            window = entry.from_day[:7]
-            try:
-                recompiled = compile_dataset(root, schema, window)
-            except StoreError as e:
-                problems.append(f"{label}: recompilation failed: {e}")
-                continue
-            if recompiled.sha256 != entry.sha256:
+        try:
+            recompiled = compile_windows(root, schema, [entry.from_day[:7] for entry in present])
+        except StoreError as e:
+            problems.append(f"{name}: recompilation failed: {e}")
+            continue
+        for entry, result in zip(present, recompiled, strict=True):
+            if result.sha256 != entry.sha256:
                 problems.append(
-                    f"{label}: recompiled hash ({recompiled.sha256}) differs from manifest hash ({entry.sha256})"
+                    f"{name} window {entry.from_day}_{entry.to_day}: recompiled hash ({result.sha256}) "
+                    f"differs from manifest hash ({entry.sha256})"
                 )
 
     record_step(Path(root), "verify", {"at": _now_ms(), "ok": not problems, "problems": problems[:50]})

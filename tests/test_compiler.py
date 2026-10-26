@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from hub.compiler import compile_all, compile_dataset, verify
+from hub.compiler import compile_all, compile_dataset, compile_windows, verify
 from hub.derive import compile_expr
 from hub.errors import StoreError
 from hub.journal import JournalWriter
@@ -144,6 +144,20 @@ class CompilerTest(unittest.TestCase):
 
         self.assertEqual(first.sha256, second.sha256)
         self.assertEqual(first.path.read_bytes(), second.path.read_bytes())
+
+    def test_one_pass_over_many_windows_matches_compiling_each_window(self):
+        # Records across four months, two scopes and a revision: the single-pass compile must give
+        # every window exactly the bytes the window-by-window compile gives it. `actual` stays
+        # constant so `surprise_z` is a defined null, as in the shuffle test above.
+        for month in (6, 7, 8, 9):
+            for day in (3, 17):
+                for scope in ("USD", "EUR"):
+                    self._write(scope, ms(2026, month, day), actual="1", forecast=str(month + day))
+        windows = ["2026-06", "2026-07", "2026-08", "2026-09"]
+        each = [compile_dataset(self.root, self.schema, w) for w in windows]
+        once = compile_windows(self.root, self.schema, windows)
+        self.assertEqual([r.sha256 for r in once], [r.sha256 for r in each])
+        self.assertEqual([r.records for r in once], [r.records for r in each])
 
     # -- manifest ----------------------------------------------------------------------------
 
